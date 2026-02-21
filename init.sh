@@ -48,14 +48,14 @@ COMMON_PKGS=(
     bash-completion btop htop screen tmux
 
     # Text / file tools
-    bat bc delta fd-find fzf jq pv
+    bat bc git-delta fd-find fzf jq pv
     ripgrep shfmt sqlite3 tree ugrep unzip
     vivid w3m whois xz-utils yamllint yq zip
 
     # Network
     curl ethtool fail2ban ipset lsof mtr
     net-tools nethogs nload nmap snmp snmpd
-    snmp-mibs-downloader tcpdump
+    tcpdump
 
     # System
     duf iperf3 lsb-release
@@ -169,8 +169,11 @@ echo "  Installing ${#COMMON_PKGS[@]} packages..."
 if ! DEBIAN_FRONTEND=noninteractive apt-get -y install "${COMMON_PKGS[@]}"; then
     echo "  Batch install failed — retrying individually..."
     for _pkg in "${COMMON_PKGS[@]}"; do
-        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
-            || warn "Package unavailable: $_pkg"
+        if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
+            echo "  OK: $_pkg"
+        else
+            warn "Package unavailable: $_pkg"
+        fi
     done
 fi
 echo "  OK: common packages done"
@@ -178,8 +181,11 @@ echo "  OK: common packages done"
 if [[ "$MODE" == "pve" ]]; then
     step "PVE-specific packages (${#PVE_EXTRA_PKGS[@]}, bare metal)"
     for _pkg in "${PVE_EXTRA_PKGS[@]}"; do
-        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
-            || warn "Package unavailable: $_pkg"
+        if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
+            echo "  OK: $_pkg"
+        else
+            warn "Package unavailable: $_pkg"
+        fi
     done
     # Initialise hardware sensor detection (non-interactive, updates /etc/modules)
     echo "  Running sensors-detect..."
@@ -194,8 +200,11 @@ else
     _qga_was_active=false
     systemctl is-active --quiet qemu-guest-agent 2>/dev/null && _qga_was_active=true
     for _pkg in "${DEBIAN_EXTRA_PKGS[@]}"; do
-        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
-            || warn "Package unavailable: $_pkg"
+        if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
+            echo "  OK: $_pkg"
+        else
+            warn "Package unavailable: $_pkg"
+        fi
     done
     # Only enable if it wasn't already running (Debian template may pre-enable it)
     if [[ "$_qga_was_active" == "false" ]]; then
@@ -391,6 +400,24 @@ fi
 # 12. Monitoring — LibreNMS agent, SNMP extends, collectd
 # =============================================================================
 step "Monitoring setup"
+
+# snmp-mibs-downloader lives in non-free; enable the component if absent
+if ! grep -rqE '\bnon-free\b' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null; then
+    echo "  Enabling non-free repo (required for snmp-mibs-downloader)..."
+    if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
+        sed -i 's/^Components: main.*/Components: main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list.d/debian.sources
+    else
+        sed -i '/^deb / s/ main$/ main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list
+    fi
+    apt-get update -q
+fi
+if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/dev/null; then
+    echo "  OK: snmp-mibs-downloader"
+else
+    warn "snmp-mibs-downloader unavailable — SNMP MIB names will show as numeric OIDs"
+fi
 
 # Collect values needed for config substitution
 echo ""
