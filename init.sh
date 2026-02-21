@@ -66,7 +66,6 @@ COMMON_PKGS=(
 
     # Monitoring (both modes send to collectd server, get polled via SNMP)
     collectd
-    snmptrapd
 
     # Misc
     dtach nano ncdu starship tig zoxide
@@ -102,7 +101,8 @@ PVE_EXTRA_PKGS=(
     frr
     frr-pythontools
 
-    # Monitoring (PVE-extra: richer plugins, collectd-utils, trapd)
+    # Monitoring (PVE-extra: richer plugins, trapd, collectd-utils)
+    snmptrapd
     collectd-utils
     pflogsumm
 
@@ -483,7 +483,7 @@ echo "  OK: check_mk socket service configured"
 install -m 755 -o root -g root "$AGENT_DIR/snmp/distro" /usr/bin/distro
 
 # Core extends — both modes
-COMMON_EXTENDS="linux_softnet_stat chrony osupdate entropy"
+COMMON_EXTENDS="linux_softnet_stat chrony osupdate"
 
 # PVE bare-metal extras (services always present on a PVE install)
 PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py rrdcached"
@@ -569,8 +569,8 @@ if [[ "$MODE" == "pve" ]]; then
     fi
 fi
 
-# ── snmptrapd.conf ────────────────────────────────────────────────────────────
-if [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
+# ── snmptrapd.conf (PVE only — Debian VMs don't receive traps) ───────────────
+if [[ "$MODE" == "pve" ]] && [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
     [[ -f /etc/snmp/snmptrapd.conf ]] \
         && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
     wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
