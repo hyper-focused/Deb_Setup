@@ -73,12 +73,11 @@ COMMON_PKGS=(
 # PVE-only extras  (bare metal)
 PVE_EXTRA_PKGS=(
     # Hardware & firmware
+    # (dmidecode, hdparm, pciutils, smartmontools, usbutils are pre-installed by PVE)
     amd64-microcode
     intel-microcode
-    dmidecode
     fdutils
     fio
-    hdparm
     inetutils-telnet
     ipmitool
     ipmiutil
@@ -86,21 +85,18 @@ PVE_EXTRA_PKGS=(
     lsscsi
     mbw
     minicom
-    sg3-utils
     nvme-cli
     nvtop
     openipmi
-    pciutils
-    smartmontools
+    sg3-utils
     stress-ng
-    usbutils
 
     # Storage & filesystem
     libguestfs-tools
     ntfs-3g
 
     # Network & routing
-    certbot
+    # (certbot omitted: PVE manages ACME/TLS certs via its own web UI)
     frr
     frr-pythontools
 
@@ -118,7 +114,7 @@ PVE_EXTRA_PKGS=(
     ruby
 
     # PVE-specific
-    proxmox-firewall
+    # (proxmox-firewall omitted: tech-preview Recommends only; pve-firewall is pre-installed)
     rsyslog
     virt-manager
     virtiofsd
