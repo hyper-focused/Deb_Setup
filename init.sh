@@ -183,9 +183,11 @@ if [[ "$MODE" == "pve" ]]; then
     done
     # Initialise hardware sensor detection (non-interactive, updates /etc/modules)
     echo "  Running sensors-detect..."
-    sensors-detect --auto > /dev/null 2>&1 \
-        && echo "  OK: sensors-detect completed" \
-        || warn "sensors-detect failed — run manually when convenient"
+    if sensors-detect --auto > /dev/null 2>&1; then
+        echo "  OK: sensors-detect completed"
+    else
+        warn "sensors-detect failed — run manually when convenient"
+    fi
 else
     step "Debian-specific packages (QEMU VM)"
     # Check if qemu-guest-agent is already running before we install
@@ -197,9 +199,11 @@ else
     done
     # Only enable if it wasn't already running (Debian template may pre-enable it)
     if [[ "$_qga_was_active" == "false" ]]; then
-        systemctl enable --now qemu-guest-agent 2>/dev/null \
-            && echo "  OK: qemu-guest-agent enabled" \
-            || warn "qemu-guest-agent enable failed — may already be handled by VM template"
+        if systemctl enable --now qemu-guest-agent 2>/dev/null; then
+            echo "  OK: qemu-guest-agent enabled"
+        else
+            warn "qemu-guest-agent enable failed — may already be handled by VM template"
+        fi
     else
         echo "  SKIP: qemu-guest-agent already active"
     fi
@@ -358,10 +362,12 @@ fi
 # =============================================================================
 step "sysctl tuning"
 _sysctl_dst="/etc/sysctl.d/99-init.conf"
-wget -qO "$_sysctl_dst" "$REPO_MODE/sysctl.conf" 2>/dev/null \
-    && sysctl --system > /dev/null \
-    && echo "  OK: sysctl tuning applied → $_sysctl_dst" \
-    || warn "sysctl tuning failed — $_sysctl_dst may be incomplete"
+if wget -qO "$_sysctl_dst" "$REPO_MODE/sysctl.conf" 2>/dev/null \
+    && sysctl --system > /dev/null; then
+    echo "  OK: sysctl tuning applied → $_sysctl_dst"
+else
+    warn "sysctl tuning failed — $_sysctl_dst may be incomplete"
+fi
 
 # =============================================================================
 # 11. zram config  [PVE only]
@@ -371,10 +377,12 @@ if [[ "$MODE" == "pve" ]]; then
     _zram_cfg="/etc/default/zramswap"
     [[ -f "$_zram_cfg" && ! -f "${_zram_cfg}.orig" ]] \
         && cp "$_zram_cfg" "${_zram_cfg}.orig"
-    wget -qO "$_zram_cfg" "$REPO_MODE/zramswap" 2>/dev/null \
-        && systemctl restart zramswap 2>/dev/null \
-        && echo "  OK: zramswap configured (lz4, 25% RAM)" \
-        || warn "zram config failed — check /etc/default/zramswap"
+    if wget -qO "$_zram_cfg" "$REPO_MODE/zramswap" 2>/dev/null \
+        && systemctl restart zramswap 2>/dev/null; then
+        echo "  OK: zramswap configured (lz4, 25% RAM)"
+    else
+        warn "zram config failed — check /etc/default/zramswap"
+    fi
 else
     step "zram config — skipped (Debian VM: memory managed by PVE host ballooning)"
 fi
