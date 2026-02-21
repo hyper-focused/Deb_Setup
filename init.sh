@@ -500,7 +500,7 @@ fi
 # Always remind about git identity — needs to be set on every host
 NEEDS_ATTENTION+=(
     "Set git identity: git config --global user.name 'Your Name' && git config --global user.email 'you@example.com'"
-    "Allow port 2211 in firewall/host rules (sshd_config uses 22 + 2211)"
+    "Ensure port 2211 is allowed in firewall/host rules for admin SSH access"
 )
 
 echo ""
