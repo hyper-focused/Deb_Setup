@@ -1,0 +1,4 @@
+--theme="Monokai Extended"
+--italic-text=always
+--style=header,grid
+--pager="less -FRX"
