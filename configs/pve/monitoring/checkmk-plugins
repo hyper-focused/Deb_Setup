@@ -1,18 +1,9 @@
 # check_mk agent-local plugins — Proxmox VE (bare metal)
-# Each line: one filename from /opt/librenms-agent/agent-local/
-# init.sh copies these to /usr/lib/check_mk_agent/local/
-#
-# ── Always installed ──────────────────────────────────────────────────────────
-dpkg          # Debian package state monitoring
-dmi           # Hardware DMI info
-temperature   # CPU/disk temperature via lm-sensors/hddtemp
-#
-# ── PVE-specific ──────────────────────────────────────────────────────────────
-proxmox       # PVE VMs/containers status, memory, disk, CPU via PVE API
-rrdcached     # rrdcached stats (used by PVE for graphs)
-#
-# ── Enable if Ceph is in use ──────────────────────────────────────────────────
-# ceph
-#
-# ── Enable if NFS exports are configured ─────────────────────────────────────
-# nfsstats
+# Lines starting with # are skipped by init.sh
+# Each active line is a filename from /opt/librenms-agent/agent-local/
+
+dpkg        # Debian package state
+dmi         # Hardware DMI info
+proxmox     # PVE VMs/containers — status, CPU, memory, disk via PVE API
+rrdcached   # RRDcached stats (PVE uses for all graph storage)
+temperature # CPU/drive temps via lm-sensors

@@ -1,15 +1,6 @@
 # check_mk agent-local plugins — Debian 13 (QEMU VM)
-# Each line: one filename from /opt/librenms-agent/agent-local/
-# init.sh copies these to /usr/lib/check_mk_agent/local/
-#
-# ── Always installed ──────────────────────────────────────────────────────────
-dpkg          # Debian package state monitoring
-dmi           # Hardware/VM DMI info (QEMU reports SMBIOS)
-#
-# ── Enable if services are running ───────────────────────────────────────────
-# nginx
-# mysql
-# memcached
-# powerdns
-# powerdns-recursor
-# bind
+# Lines starting with # are skipped by init.sh
+# Each active line is a filename from /opt/librenms-agent/agent-local/
+
+dpkg      # Debian package state
+dmi       # VM DMI info (QEMU exposes via SMBIOS)

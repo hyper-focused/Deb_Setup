@@ -1,0 +1,10 @@
+# librenms-agent commit pin — hyper-focused/Deb_Setup
+# Repo: https://github.com/librenms/librenms-agent
+#
+# Update procedure:
+#   1. Review changes: https://github.com/librenms/librenms-agent/commits/master
+#   2. Check if any pinned extend scripts have config-breaking changes
+#   3. Update SHA + DATE below and commit to this repo
+#
+SHA=2da094b05fd6adab848794d8c37581d6a7132c7a
+DATE=2026-01-10

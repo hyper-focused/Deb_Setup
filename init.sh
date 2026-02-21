@@ -322,14 +322,37 @@ read -rp "  Collectd / LibreNMS server IP: " COLLECTD_SERVER
 COLLECTD_SERVER="${COLLECTD_SERVER:-127.0.0.1}"
 COLLECTD_HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
 
-# ── LibreNMS agent (cloned to /opt/librenms-agent) ───────────────────────────
+# ── LibreNMS agent — pinned to commit SHA from librenms-agent.pin ─────────────
 AGENT_DIR="/opt/librenms-agent"
+AGENT_REPO="https://github.com/librenms/librenms-agent.git"
+
+# Read pinned SHA from our repo (source of truth for version control)
+_pin_file="$(wget -qO- "$REPO_RAW/librenms-agent.pin")"
+AGENT_PIN_SHA="$(echo "$_pin_file" | grep '^SHA=' | cut -d= -f2)"
+AGENT_PIN_DATE="$(echo "$_pin_file" | grep '^DATE=' | cut -d= -f2)"
+
+if [[ -z "$AGENT_PIN_SHA" ]]; then
+    echo "  ERROR: could not read librenms-agent.pin from repo"; exit 1
+fi
+echo "  librenms-agent pin: $AGENT_PIN_SHA ($AGENT_PIN_DATE)"
+
 if [[ ! -d "$AGENT_DIR/.git" ]]; then
-    git clone --depth=1 https://github.com/librenms/librenms-agent.git "$AGENT_DIR"
-    echo "  OK: librenms-agent cloned to $AGENT_DIR"
+    # Shallow fetch of exact pinned commit — no full history needed
+    mkdir -p "$AGENT_DIR"
+    git -C "$AGENT_DIR" init -q
+    git -C "$AGENT_DIR" remote add origin "$AGENT_REPO"
+    git -C "$AGENT_DIR" fetch --depth=1 origin "$AGENT_PIN_SHA"
+    git -C "$AGENT_DIR" checkout FETCH_HEAD
+    echo "  OK: librenms-agent cloned at $AGENT_PIN_SHA"
 else
-    git -C "$AGENT_DIR" pull --ff-only || echo "  WARNING: librenms-agent pull failed"
-    echo "  OK: librenms-agent updated"
+    _current="$(git -C "$AGENT_DIR" rev-parse HEAD)"
+    if [[ "$_current" != "$AGENT_PIN_SHA" ]]; then
+        git -C "$AGENT_DIR" fetch --depth=1 origin "$AGENT_PIN_SHA"
+        git -C "$AGENT_DIR" checkout FETCH_HEAD
+        echo "  OK: librenms-agent updated to $AGENT_PIN_SHA"
+    else
+        echo "  SKIP: librenms-agent already at pinned commit"
+    fi
 fi
 
 # ── check_mk agent binary ─────────────────────────────────────────────────────
@@ -349,26 +372,32 @@ if [[ ! -f /etc/systemd/system/check_mk.socket ]]; then
 fi
 
 # ── SNMP extend scripts → /etc/snmp/ ─────────────────────────────────────────
-# Common scripts (both modes)
-COMMON_EXTENDS="distro linux_softnet_stat chrony osupdate entropy"
-# PVE-only extends
-PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py"
-
-# Install distro to /usr/bin (some configs reference it there)
+# distro goes to /usr/bin/ (snmpd.conf references it there)
 install -m 755 "$AGENT_DIR/snmp/distro" /usr/bin/distro
-install -m 755 "$AGENT_DIR/snmp/distro" /etc/snmp/distro
+
+# Core extends — both modes
+COMMON_EXTENDS="linux_softnet_stat chrony osupdate entropy"
+
+# PVE bare-metal extras (services always present on a PVE install)
+PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py rrdcached"
 
 for _script in $COMMON_EXTENDS; do
-    [[ -f "$AGENT_DIR/snmp/$_script" ]] \
-        && install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script" \
-        && echo "  OK: extend $\_script"
+    if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
+        install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
+        echo "  OK: extend $_script"
+    else
+        echo "  WARNING: extend script not found: $_script"
+    fi
 done
 
 if [[ "$MODE" == "pve" ]]; then
     for _script in $PVE_EXTENDS; do
-        [[ -f "$AGENT_DIR/snmp/$_script" ]] \
-            && install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script" \
-            && echo "  OK: extend $_script"
+        if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
+            install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
+            echo "  OK: extend $_script"
+        else
+            echo "  WARNING: extend script not found: $_script"
+        fi
     done
 fi
 
