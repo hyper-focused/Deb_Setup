@@ -1,0 +1,14 @@
+# /etc/default/zramswap — Proxmox VE (bare metal)
+# Deployed by hyper-focused/Deb_Setup init.sh
+#
+# ZFS volumes do not support swap partitions; zram provides compressed
+# in-memory swap. KSM (Kernel Same-page Merging) is managed by PVE directly.
+#
+# Compression: lz4 (low latency) or zstd (higher ratio, more CPU)
+ALGO=lz4
+
+# PERCENT: zram device size as a percentage of total physical RAM.
+# The device is sparse — compressed usage is typically 30-50% of this value.
+#   16 GB RAM @ 25% → 4 GB device  → ~1-2 GB actual memory used
+#   64 GB RAM @ 25% → 16 GB device → ~5-8 GB actual memory used
+PERCENT=25

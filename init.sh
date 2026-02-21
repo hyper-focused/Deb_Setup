@@ -33,6 +33,11 @@ esac
 echo "Mode: $MODE"
 REPO_MODE="$REPO_RAW/configs/$MODE"
 
+# ── Failure & attention tracking ──────────────────────────────────────────────
+FAILURES=()
+NEEDS_ATTENTION=()
+warn() { echo "  WARNING: $*"; FAILURES+=("$*"); }
+
 # ── Package lists ─────────────────────────────────────────────────────────────
 
 # Installed on both PVE and Debian
@@ -52,7 +57,7 @@ COMMON_PKGS=(
 
     # System
     chrony duf gdisk iperf3 lsb-release
-    mosh parted pigz strace xfsprogs
+    mosh parted pigz plocate psmisc strace sysstat xfsprogs
 
     # Dev & scripting
     build-essential git gnupg pipx
@@ -69,6 +74,7 @@ COMMON_PKGS=(
 PVE_EXTRA_PKGS=(
     # Hardware & firmware
     amd64-microcode
+    intel-microcode
     dmidecode
     fdutils
     fio
@@ -80,6 +86,7 @@ PVE_EXTRA_PKGS=(
     lsscsi
     mbw
     minicom
+    sg3-utils
     nvme-cli
     nvtop
     openipmi
@@ -130,7 +137,7 @@ step() {
     STEP=$((STEP + 1))
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Step $STEP: $*"
+    echo "  Step $STEP: $*  [$(date '+%H:%M:%S')]"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -144,22 +151,50 @@ DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade
 # =============================================================================
 # 2. Package installation
 # =============================================================================
-step "Common packages"
-DEBIAN_FRONTEND=noninteractive apt-get -y install "${COMMON_PKGS[@]}"
-
-if [[ "$MODE" == "pve" ]]; then
-    step "PVE-specific packages (bare metal)"
-    for pkg in "${PVE_EXTRA_PKGS[@]}"; do
-        DEBIAN_FRONTEND=noninteractive apt-get -y install "$pkg" \
-            || echo "  WARNING: $pkg failed or not found — skipping"
-    done
-else
-    step "Debian-specific packages (QEMU VM)"
-    for pkg in "${DEBIAN_EXTRA_PKGS[@]}"; do
-        DEBIAN_FRONTEND=noninteractive apt-get -y install "$pkg" \
-            || echo "  WARNING: $pkg failed or not found — skipping"
+step "Common packages (${#COMMON_PKGS[@]})"
+echo "  Installing ${#COMMON_PKGS[@]} packages..."
+if ! DEBIAN_FRONTEND=noninteractive apt-get -y install "${COMMON_PKGS[@]}"; then
+    echo "  Batch install failed — retrying individually..."
+    for _pkg in "${COMMON_PKGS[@]}"; do
+        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
+            || warn "Package unavailable: $_pkg"
     done
 fi
+echo "  OK: common packages done"
+
+if [[ "$MODE" == "pve" ]]; then
+    step "PVE-specific packages (${#PVE_EXTRA_PKGS[@]}, bare metal)"
+    for _pkg in "${PVE_EXTRA_PKGS[@]}"; do
+        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
+            || warn "Package unavailable: $_pkg"
+    done
+    # Initialise hardware sensor detection (non-interactive, updates /etc/modules)
+    echo "  Running sensors-detect..."
+    sensors-detect --auto > /dev/null 2>&1 \
+        && echo "  OK: sensors-detect completed" \
+        || warn "sensors-detect failed — run manually when convenient"
+else
+    step "Debian-specific packages (QEMU VM)"
+    # Check if qemu-guest-agent is already running before we install
+    _qga_was_active=false
+    systemctl is-active --quiet qemu-guest-agent 2>/dev/null && _qga_was_active=true
+    for _pkg in "${DEBIAN_EXTRA_PKGS[@]}"; do
+        DEBIAN_FRONTEND=noninteractive apt-get -y install "$_pkg" \
+            || warn "Package unavailable: $_pkg"
+    done
+    # Only enable if it wasn't already running (Debian template may pre-enable it)
+    if [[ "$_qga_was_active" == "false" ]]; then
+        systemctl enable --now qemu-guest-agent 2>/dev/null \
+            && echo "  OK: qemu-guest-agent enabled" \
+            || warn "qemu-guest-agent enable failed — may already be handled by VM template"
+    else
+        echo "  SKIP: qemu-guest-agent already active"
+    fi
+fi
+
+# fail2ban is installed but intentionally left unconfigured
+# Default jail watches port 22; needs a local override for port 2211
+NEEDS_ATTENTION+=("Configure fail2ban: create /etc/fail2ban/jail.d/sshd.conf to protect port 2211")
 
 # =============================================================================
 # 3. bat config
@@ -209,7 +244,7 @@ if [[ "$MODE" == "pve" ]]; then
         export NVM_DIR="$HOME/.nvm"
         # shellcheck source=/dev/null
         . "$NVM_DIR/nvm.sh"
-        nvm install --lts || echo "  WARNING: NVM LTS install failed"
+        nvm install --lts || warn "NVM LTS install failed"
         echo "  OK: NVM + Node LTS installed"
     else
         echo "  SKIP: NVM already installed"
@@ -219,7 +254,7 @@ if [[ "$MODE" == "pve" ]]; then
     if ! command -v direnv &>/dev/null; then
         _tmp="$(mktemp -d)"
         git clone https://github.com/direnv/direnv.git "$_tmp"
-        (cd "$_tmp" && make install) || echo "  WARNING: Direnv build failed"
+        (cd "$_tmp" && make install) || warn "Direnv build failed"
         rm -rf "$_tmp"
         echo "  OK: Direnv installed"
     else
@@ -306,12 +341,35 @@ else
 fi
 
 # =============================================================================
-# 10. Monitoring — LibreNMS agent, SNMP extends, collectd
+# 10. sysctl tuning
+# =============================================================================
+step "sysctl tuning"
+_sysctl_dst="/etc/sysctl.d/99-init.conf"
+wget -qO "$_sysctl_dst" "$REPO_MODE/sysctl.conf" 2>/dev/null \
+    && sysctl --system > /dev/null \
+    && echo "  OK: sysctl tuning applied → $_sysctl_dst" \
+    || warn "sysctl tuning failed — $_sysctl_dst may be incomplete"
+
+# =============================================================================
+# 11. zram config  [PVE only]
+# =============================================================================
+if [[ "$MODE" == "pve" ]]; then
+    step "zram config (PVE)"
+    _zram_cfg="/etc/default/zramswap"
+    [[ -f "$_zram_cfg" && ! -f "${_zram_cfg}.orig" ]] \
+        && cp "$_zram_cfg" "${_zram_cfg}.orig"
+    wget -qO "$_zram_cfg" "$REPO_MODE/zramswap" 2>/dev/null \
+        && systemctl restart zramswap 2>/dev/null \
+        && echo "  OK: zramswap configured (lz4, 25% RAM)" \
+        || warn "zram config failed — check /etc/default/zramswap"
+else
+    step "zram config — skipped (Debian VM: memory managed by PVE host ballooning)"
+fi
+
+# =============================================================================
+# 12. Monitoring — LibreNMS agent, SNMP extends, collectd
 # =============================================================================
 step "Monitoring setup"
-
-# Items needing manual attention after the script completes
-NEEDS_ATTENTION=()
 
 # Collect values needed for config substitution
 echo ""
@@ -494,10 +552,18 @@ else
 fi
 
 # =============================================================================
+# Cleanup
+# =============================================================================
+step "Cleanup"
+apt-get autoremove -y > /dev/null
+apt-get clean
+echo "  OK: apt cache cleaned"
+
+# =============================================================================
 # Done
 # =============================================================================
 
-# Always remind about git identity — needs to be set on every host
+# Always-present reminders
 NEEDS_ATTENTION+=(
     "Set git identity: git config --global user.name 'Your Name' && git config --global user.email 'you@example.com'"
     "Ensure port 2211 is allowed in firewall/host rules for admin SSH access"
@@ -509,6 +575,16 @@ echo "║   ALL DONE  —  $(date '+%Y-%m-%d %H:%M')                   ║"
 echo "╠══════════════════════════════════════════════════╣"
 echo "║  Log: $LOGFILE"
 echo "╚══════════════════════════════════════════════════╝"
+
+# ── Warnings / failures ───────────────────────────────────────────────────────
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+    echo ""
+    echo "┌─ WARNINGS / FAILURES ─────────────────────────────────────┐"
+    for _item in "${FAILURES[@]}"; do
+        echo "│  ✗ $_item"
+    done
+    echo "└───────────────────────────────────────────────────────────┘"
+fi
 
 # ── Post-install attention list ───────────────────────────────────────────────
 if [[ ${#NEEDS_ATTENTION[@]} -gt 0 ]]; then
