@@ -37,7 +37,6 @@ echo "Mode: $MODE"
 COMMON_PKGS=(
     # Shell & terminal
     bash-completion btop htop screen tmux
-    zsh zsh-autosuggestions zsh-syntax-highlighting
 
     # Text / file tools
     bat bc delta fd-find fzf jq lzop pv
@@ -45,52 +44,80 @@ COMMON_PKGS=(
     vivid w3m wget whois xz-utils yamllint yq zip zstd
 
     # Network
-    bind9-dnsutils curl ethtool ipmitool ipset lsof mtr
-    net-tools nmap rsync snmp snmpd snmp-mibs-downloader
-    socat tcpdump traceroute
+    bind9-dnsutils curl ethtool fail2ban ipset lsof mtr
+    net-tools nethogs nload nmap rsync snmp snmpd
+    snmp-mibs-downloader socat tcpdump traceroute
 
-    # Hardware & system
-    chrony dmidecode gdisk hdparm lm-sensors lsb-release
-    nvme-cli parted pciutils pigz smartmontools
-    strace usbutils xfsprogs
+    # System
+    chrony duf gdisk iperf3 lsb-release
+    mosh parted pigz strace xfsprogs
 
     # Dev & scripting
     build-essential git gnupg pipx
 
     # Misc
-    dtach man-db nano starship
+    dtach man-db nano ncdu starship tig zoxide
 )
 
-# PVE-only extras
+# PVE-only extras  (bare metal)
 PVE_EXTRA_PKGS=(
+    # Hardware & firmware
     amd64-microcode
+    dmidecode
+    fdutils
+    fio
+    hdparm
+    inetutils-telnet
+    ipmitool
+    ipmiutil
+    lm-sensors
+    lsscsi
+    mbw
+    minicom
+    nvme-cli
+    nvtop
+    openipmi
+    pciutils
+    smartmontools
+    stress-ng
+    usbutils
+
+    # Storage & filesystem
+    libguestfs-tools
+    ntfs-3g
+
+    # Network & routing
     certbot
+    frr
+    frr-pythontools
+
+    # Monitoring
     collectd
     collectd-utils
+    pflogsumm
+    snmptrapd
+
+    # Scripting & dev
     cpanminus
     cpuinfo
     cstream
     faketime
-    fdutils
-    frr
-    frr-pythontools
     imagemagick
-    inetutils-telnet
-    ipmiutil
-    libguestfs-tools
-    minicom
-    ntfs-3g
-    openipmi
-    pflogsumm
-    proxmox-firewall
     python3-json5
-    rsyslog
     ruby
-    snmptrapd
+
+    # PVE-specific
+    proxmox-firewall
+    rsyslog
     virt-manager
     virtiofsd
     xterm
     zram-tools
+)
+
+# Debian-only extras  (QEMU VM)
+DEBIAN_EXTRA_PKGS=(
+    qemu-guest-agent   # essential: proper shutdown, snapshots, IP reporting
 )
 
 # ── Step counter ──────────────────────────────────────────────────────────────
@@ -117,8 +144,14 @@ step "Common packages"
 DEBIAN_FRONTEND=noninteractive apt-get -y install "${COMMON_PKGS[@]}"
 
 if [[ "$MODE" == "pve" ]]; then
-    step "PVE-specific packages"
+    step "PVE-specific packages (bare metal)"
     for pkg in "${PVE_EXTRA_PKGS[@]}"; do
+        DEBIAN_FRONTEND=noninteractive apt-get -y install "$pkg" \
+            || echo "  WARNING: $pkg failed or not found — skipping"
+    done
+else
+    step "Debian-specific packages (QEMU VM)"
+    for pkg in "${DEBIAN_EXTRA_PKGS[@]}"; do
         DEBIAN_FRONTEND=noninteractive apt-get -y install "$pkg" \
             || echo "  WARNING: $pkg failed or not found — skipping"
     done
@@ -234,7 +267,7 @@ step "Configs from repo"
 [[ -f /root/.bashrc && ! -f /root/.bashrc.orig ]] \
     && cp /root/.bashrc /root/.bashrc.orig \
     && echo "  Backed up existing .bashrc → .bashrc.orig"
-wget -qO /root/.bashrc "$REPO_CONFIGS/bashrc"
+wget -qO /root/.bashrc "$REPO_CONFIGS/.bashrc"
 echo "  OK: .bashrc installed"
 
 # sshd_config
