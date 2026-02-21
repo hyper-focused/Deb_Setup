@@ -23,15 +23,15 @@ MaxAuthTries 3
 PermitEmptyPasswords no
 KbdInteractiveAuthentication no
 LoginGraceTime 30
-ClientAliveInterval 300
+ClientAliveInterval 60
 ClientAliveCountMax 3
 UsePAM yes                     # Required for other apps
 X11Forwarding no
-AllowAgentForwarding no
-AllowTcpForwarding no
+AllowAgentForwarding yes
+AllowTcpForwarding yes
 PermitTunnel no
 
 AuthorizedKeysFile .ssh/authorized_keys
-AcceptEnv none
+AcceptEnv LANG LC_*
 
 Subsystem sftp /usr/lib/openssh/sftp-server

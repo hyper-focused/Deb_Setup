@@ -310,6 +310,9 @@ fi
 # =============================================================================
 step "Monitoring setup"
 
+# Items needing manual attention after the script completes
+NEEDS_ATTENTION=()
+
 # Collect values needed for config substitution
 echo ""
 read -rp "  SNMP community string [default: public]: " SNMP_COMMUNITY
@@ -356,24 +359,22 @@ else
 fi
 
 # ── check_mk agent binary ─────────────────────────────────────────────────────
-if [[ ! -f /usr/bin/check_mk_agent ]]; then
-    install -m 755 "$AGENT_DIR/check_mk_agent" /usr/bin/check_mk_agent
-    echo "  OK: check_mk_agent installed to /usr/bin"
-fi
+# Always update — binary-only, no associated config to preserve
+install -m 755 -o root -g root "$AGENT_DIR/check_mk_agent" /usr/bin/check_mk_agent
+echo "  OK: check_mk_agent installed/updated"
 
 # ── check_mk systemd socket service ──────────────────────────────────────────
 mkdir -p /usr/lib/check_mk_agent/local /usr/lib/check_mk_agent/plugins
-if [[ ! -f /etc/systemd/system/check_mk.socket ]]; then
-    install -m 644 "$AGENT_DIR/check_mk.socket"   /etc/systemd/system/
-    install -m 644 "$AGENT_DIR/check_mk@.service" /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable --now check_mk.socket
-    echo "  OK: check_mk socket service enabled"
-fi
+# Always update unit files alongside binary — idempotent
+install -m 644 -o root -g root "$AGENT_DIR/check_mk.socket"   /etc/systemd/system/
+install -m 644 -o root -g root "$AGENT_DIR/check_mk@.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now check_mk.socket 2>/dev/null || systemctl start check_mk.socket
+echo "  OK: check_mk socket service configured"
 
 # ── SNMP extend scripts → /etc/snmp/ ─────────────────────────────────────────
 # distro goes to /usr/bin/ (snmpd.conf references it there)
-install -m 755 "$AGENT_DIR/snmp/distro" /usr/bin/distro
+install -m 755 -o root -g root "$AGENT_DIR/snmp/distro" /usr/bin/distro
 
 # Core extends — both modes
 COMMON_EXTENDS="linux_softnet_stat chrony osupdate entropy"
@@ -381,9 +382,10 @@ COMMON_EXTENDS="linux_softnet_stat chrony osupdate entropy"
 # PVE bare-metal extras (services always present on a PVE install)
 PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py rrdcached"
 
+# Extend scripts run as root but are readable by the snmp group for auditing
 for _script in $COMMON_EXTENDS; do
     if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
-        install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
+        install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
         echo "  OK: extend $_script"
     else
         echo "  WARNING: extend script not found: $_script"
@@ -393,7 +395,7 @@ done
 if [[ "$MODE" == "pve" ]]; then
     for _script in $PVE_EXTENDS; do
         if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
-            install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
+            install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
             echo "  OK: extend $_script"
         else
             echo "  WARNING: extend script not found: $_script"
@@ -406,7 +408,7 @@ PLUGIN_LIST_URL="$REPO_MODE/monitoring/checkmk-plugins"
 _plugin_list="$(wget -qO- "$PLUGIN_LIST_URL" | grep -v '^#' | grep -v '^$' | awk '{print $1}')"
 for _plugin in $_plugin_list; do
     if [[ -f "$AGENT_DIR/agent-local/$_plugin" ]]; then
-        install -m 755 "$AGENT_DIR/agent-local/$_plugin" \
+        install -m 755 -o root -g root "$AGENT_DIR/agent-local/$_plugin" \
             "/usr/lib/check_mk_agent/local/$_plugin"
         echo "  OK: check_mk plugin $_plugin"
     fi
@@ -419,11 +421,22 @@ sed -i \
     -e "s|SYSLOCATION|$SYS_LOCATION|g" \
     -e "s|SYSCONTACT|$SYS_CONTACT|g" \
     /tmp/snmpd.conf.new
-[[ -f /etc/snmp/snmpd.conf && ! -f /etc/snmp/snmpd.conf.orig ]] \
-    && cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.orig
-mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
-systemctl restart snmpd
-echo "  OK: snmpd.conf applied (community: $SNMP_COMMUNITY)"
+# Validate: file must be non-empty and all placeholders substituted
+if [[ -s /tmp/snmpd.conf.new ]] \
+    && grep -q "^com2sec" /tmp/snmpd.conf.new \
+    && ! grep -qE 'SNMP_COMMUNITY|SYSLOCATION|SYSCONTACT' /tmp/snmpd.conf.new; then
+    [[ -f /etc/snmp/snmpd.conf && ! -f /etc/snmp/snmpd.conf.orig ]] \
+        && cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.orig
+    mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
+    chown root:Debian-snmp /etc/snmp/snmpd.conf
+    chmod 640 /etc/snmp/snmpd.conf
+    systemctl restart snmpd
+    echo "  OK: snmpd.conf applied (community: $SNMP_COMMUNITY)"
+else
+    rm -f /tmp/snmpd.conf.new
+    echo "  WARNING: snmpd.conf validation failed — original kept"
+    NEEDS_ATTENTION+=("Fix /etc/snmp/snmpd.conf — validation failed, original preserved")
+fi
 
 # ── smart.config (PVE only — auto-detect drives) ─────────────────────────────
 if [[ "$MODE" == "pve" ]]; then
@@ -441,7 +454,10 @@ if [[ "$MODE" == "pve" ]]; then
             fi
         done < <(lsblk -dno NAME,TYPE /dev/sd* /dev/nvme* 2>/dev/null \
             | awk '$2=="disk"{print "/dev/"$1}')
+        chown root:Debian-snmp "$SMART_CFG"
+        chmod 640 "$SMART_CFG"
         echo "  OK: smart.config written with detected drives"
+        NEEDS_ATTENTION+=("Verify auto-detected drive list in /etc/snmp/smart.config")
     else
         echo "  SKIP: smart.config already present"
     fi
@@ -454,6 +470,8 @@ if [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
     wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
     sed -i "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" /tmp/snmptrapd.conf.new
     mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
+    chown root:Debian-snmp /etc/snmp/snmptrapd.conf
+    chmod 640 /etc/snmp/snmptrapd.conf
     echo "  OK: snmptrapd.conf applied"
 fi
 
@@ -472,21 +490,39 @@ if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
     echo "  OK: collectd.conf applied (→ $COLLECTD_SERVER)"
 else
     echo "  SKIP: collectd server not set — collectd.conf not deployed"
+    NEEDS_ATTENTION+=("Configure collectd: edit /etc/collectd/collectd.conf with LibreNMS server IP")
 fi
 
 # =============================================================================
 # Done
 # =============================================================================
+
+# Always remind about git identity — needs to be set on every host
+NEEDS_ATTENTION+=(
+    "Set git identity: git config --global user.name 'Your Name' && git config --global user.email 'you@example.com'"
+    "Allow port 2211 in firewall/host rules (sshd_config uses 22 + 2211)"
+)
+
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
 echo "║   ALL DONE  —  $(date '+%Y-%m-%d %H:%M')                   ║"
 echo "╠══════════════════════════════════════════════════╣"
 echo "║  Log: $LOGFILE"
 echo "╚══════════════════════════════════════════════════╝"
+
+# ── Post-install attention list ───────────────────────────────────────────────
+if [[ ${#NEEDS_ATTENTION[@]} -gt 0 ]]; then
+    echo ""
+    echo "┌─ ACTION REQUIRED ─────────────────────────────────────────┐"
+    for _item in "${NEEDS_ATTENTION[@]}"; do
+        echo "│  • $_item"
+    done
+    echo "└───────────────────────────────────────────────────────────┘"
+fi
+
 echo ""
 echo "Next steps:"
 echo "  source ~/.bashrc       # activate aliases & prompt"
-echo "  exec zsh               # switch to zsh"
 [[ "$MODE" == "pve" ]] && echo "  nvm use --lts          # activate Node LTS"
 echo "  tmux new -s main       # start persistent session"
 echo "  bat /etc/hosts         # test bat theme"
