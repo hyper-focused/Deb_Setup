@@ -4,3 +4,4 @@
 
 dpkg      # Debian package state
 dmi       # VM DMI info (QEMU exposes via SMBIOS)
+entropy   # Kernel entropy pool level

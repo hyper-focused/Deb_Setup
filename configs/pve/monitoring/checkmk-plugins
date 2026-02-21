@@ -4,6 +4,7 @@
 
 dpkg        # Debian package state
 dmi         # Hardware DMI info
+entropy     # Kernel entropy pool level
 proxmox     # PVE VMs/containers — status, CPU, memory, disk via PVE API
 rrdcached   # RRDcached stats (PVE uses for all graph storage)
 temperature # CPU/drive temps via lm-sensors
