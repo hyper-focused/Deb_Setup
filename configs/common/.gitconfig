@@ -1,0 +1,42 @@
+# ~/.gitconfig — hyper-focused/Deb_Setup
+# Set identity before first use:
+#   git config --global user.name "Your Name"
+#   git config --global user.email "you@example.com"
+
+[core]
+    pager  = delta
+    editor = nano
+
+[interactive]
+    diffFilter = delta --color-only
+
+[delta]
+    navigate     = true
+    side-by-side = true
+    line-numbers = true
+    dark         = true
+
+[merge]
+    conflictstyle = diff3
+
+[diff]
+    colorMoved = default
+
+[pull]
+    rebase = false
+
+[init]
+    defaultBranch = main
+
+[color]
+    ui = auto
+
+[alias]
+    st     = status -sb
+    lg     = log --oneline --graph --decorate --all
+    ll     = log --oneline --graph --decorate -20
+    co     = checkout
+    br     = branch -vv
+    last   = log -1 HEAD --stat
+    unstage = reset HEAD --
+    whoami = !git config user.name && git config user.email

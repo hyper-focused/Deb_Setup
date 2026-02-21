@@ -7,7 +7,8 @@
 set -euo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/hyper-focused/Deb_Setup/main"
-REPO_CONFIGS="$REPO_RAW/configs"
+REPO_COMMON="$REPO_RAW/configs/common"
+# REPO_MODE is set after OS selection: configs/pve or configs/debian
 LOGFILE="/var/log/deb-setup-init.log"
 exec > >(tee -a "$LOGFILE") 2>&1
 echo "=== INIT START $(date) ==="
@@ -30,6 +31,7 @@ case "$_choice" in
     *) echo "Invalid choice: $_choice"; exit 1 ;;
 esac
 echo "Mode: $MODE"
+REPO_MODE="$REPO_RAW/configs/$MODE"
 
 # ── Package lists ─────────────────────────────────────────────────────────────
 
@@ -54,6 +56,10 @@ COMMON_PKGS=(
 
     # Dev & scripting
     build-essential git gnupg pipx
+
+    # Monitoring (both modes send to collectd server, get polled via SNMP)
+    collectd
+    snmptrapd
 
     # Misc
     dtach man-db nano ncdu starship tig zoxide
@@ -91,11 +97,9 @@ PVE_EXTRA_PKGS=(
     frr
     frr-pythontools
 
-    # Monitoring
-    collectd
+    # Monitoring (PVE-extra: richer plugins, collectd-utils, trapd)
     collectd-utils
     pflogsumm
-    snmptrapd
 
     # Scripting & dev
     cpanminus
@@ -163,7 +167,7 @@ fi
 step "bat config"
 mkdir -p /root/.config/bat
 if [[ ! -f /root/.config/bat/config ]]; then
-    wget -qO /root/.config/bat/config "$REPO_CONFIGS/bat/config"
+    wget -qO /root/.config/bat/config "$REPO_COMMON/bat/config"
     echo "  OK: bat config installed"
 else
     echo "  SKIP: bat config already present"
@@ -189,7 +193,7 @@ fi
 step "Starship config"
 mkdir -p /root/.config
 if [[ ! -f /root/.config/starship.toml ]]; then
-    wget -qO /root/.config/starship.toml "$REPO_CONFIGS/starship.toml"
+    wget -qO /root/.config/starship.toml "$REPO_COMMON/starship.toml"
     echo "  OK: starship.toml installed"
 else
     echo "  SKIP: starship.toml already present"
@@ -267,15 +271,31 @@ step "Configs from repo"
 [[ -f /root/.bashrc && ! -f /root/.bashrc.orig ]] \
     && cp /root/.bashrc /root/.bashrc.orig \
     && echo "  Backed up existing .bashrc → .bashrc.orig"
-wget -qO /root/.bashrc "$REPO_CONFIGS/.bashrc"
+wget -qO /root/.bashrc "$REPO_COMMON/.bashrc"
 echo "  OK: .bashrc installed"
+
+# Dotfiles deployed to /root/
+for _dotfile in .tmux.conf .gitconfig .vimrc; do
+    wget -qO "/root/$_dotfile" "$REPO_COMMON/$_dotfile"
+    echo "  OK: $_dotfile installed"
+done
+
+# htop
+mkdir -p /root/.config/htop
+wget -qO /root/.config/htop/htoprc "$REPO_COMMON/htop/htoprc"
+echo "  OK: htop/htoprc installed"
+
+# btop
+mkdir -p /root/.config/btop
+wget -qO /root/.config/btop/btop.conf "$REPO_COMMON/btop/btop.conf"
+echo "  OK: btop/btop.conf installed"
 
 # sshd_config
 SSHD="/etc/ssh/sshd_config"
 [[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] \
     && cp "$SSHD" "${SSHD}.orig" \
     && echo "  Backed up original sshd_config"
-wget -qO "${SSHD}.new" "$REPO_CONFIGS/sshd_config"
+wget -qO "${SSHD}.new" "$REPO_COMMON/sshd_config"
 if sshd -t -f "${SSHD}.new" 2>/dev/null; then
     mv "${SSHD}.new" "$SSHD"
     systemctl reload sshd
@@ -283,6 +303,146 @@ if sshd -t -f "${SSHD}.new" 2>/dev/null; then
 else
     rm -f "${SSHD}.new"
     echo "  WARNING: sshd_config validation failed — keeping original"
+fi
+
+# =============================================================================
+# 10. Monitoring — LibreNMS agent, SNMP extends, collectd
+# =============================================================================
+step "Monitoring setup"
+
+# Collect values needed for config substitution
+echo ""
+read -rp "  SNMP community string [default: public]: " SNMP_COMMUNITY
+SNMP_COMMUNITY="${SNMP_COMMUNITY:-public}"
+read -rp "  sysLocation (e.g. 'DC1 Rack 4'): " SYS_LOCATION
+SYS_LOCATION="${SYS_LOCATION:-Unknown}"
+read -rp "  sysContact (e.g. 'noc@example.com'): " SYS_CONTACT
+SYS_CONTACT="${SYS_CONTACT:-root@localhost}"
+read -rp "  Collectd / LibreNMS server IP: " COLLECTD_SERVER
+COLLECTD_SERVER="${COLLECTD_SERVER:-127.0.0.1}"
+COLLECTD_HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
+
+# ── LibreNMS agent (cloned to /opt/librenms-agent) ───────────────────────────
+AGENT_DIR="/opt/librenms-agent"
+if [[ ! -d "$AGENT_DIR/.git" ]]; then
+    git clone --depth=1 https://github.com/librenms/librenms-agent.git "$AGENT_DIR"
+    echo "  OK: librenms-agent cloned to $AGENT_DIR"
+else
+    git -C "$AGENT_DIR" pull --ff-only || echo "  WARNING: librenms-agent pull failed"
+    echo "  OK: librenms-agent updated"
+fi
+
+# ── check_mk agent binary ─────────────────────────────────────────────────────
+if [[ ! -f /usr/bin/check_mk_agent ]]; then
+    install -m 755 "$AGENT_DIR/check_mk_agent" /usr/bin/check_mk_agent
+    echo "  OK: check_mk_agent installed to /usr/bin"
+fi
+
+# ── check_mk systemd socket service ──────────────────────────────────────────
+mkdir -p /usr/lib/check_mk_agent/local /usr/lib/check_mk_agent/plugins
+if [[ ! -f /etc/systemd/system/check_mk.socket ]]; then
+    install -m 644 "$AGENT_DIR/check_mk.socket"   /etc/systemd/system/
+    install -m 644 "$AGENT_DIR/check_mk@.service" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now check_mk.socket
+    echo "  OK: check_mk socket service enabled"
+fi
+
+# ── SNMP extend scripts → /etc/snmp/ ─────────────────────────────────────────
+# Common scripts (both modes)
+COMMON_EXTENDS="distro linux_softnet_stat chrony osupdate entropy"
+# PVE-only extends
+PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py"
+
+# Install distro to /usr/bin (some configs reference it there)
+install -m 755 "$AGENT_DIR/snmp/distro" /usr/bin/distro
+install -m 755 "$AGENT_DIR/snmp/distro" /etc/snmp/distro
+
+for _script in $COMMON_EXTENDS; do
+    [[ -f "$AGENT_DIR/snmp/$_script" ]] \
+        && install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script" \
+        && echo "  OK: extend $\_script"
+done
+
+if [[ "$MODE" == "pve" ]]; then
+    for _script in $PVE_EXTENDS; do
+        [[ -f "$AGENT_DIR/snmp/$_script" ]] \
+            && install -m 755 "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script" \
+            && echo "  OK: extend $_script"
+    done
+fi
+
+# ── check_mk agent-local plugins ─────────────────────────────────────────────
+PLUGIN_LIST_URL="$REPO_MODE/monitoring/checkmk-plugins"
+_plugin_list="$(wget -qO- "$PLUGIN_LIST_URL" | grep -v '^#' | grep -v '^$' | awk '{print $1}')"
+for _plugin in $_plugin_list; do
+    if [[ -f "$AGENT_DIR/agent-local/$_plugin" ]]; then
+        install -m 755 "$AGENT_DIR/agent-local/$_plugin" \
+            "/usr/lib/check_mk_agent/local/$_plugin"
+        echo "  OK: check_mk plugin $_plugin"
+    fi
+done
+
+# ── snmpd.conf ────────────────────────────────────────────────────────────────
+wget -qO /tmp/snmpd.conf.new "$REPO_MODE/monitoring/snmpd.conf"
+sed -i \
+    -e "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" \
+    -e "s|SYSLOCATION|$SYS_LOCATION|g" \
+    -e "s|SYSCONTACT|$SYS_CONTACT|g" \
+    /tmp/snmpd.conf.new
+[[ -f /etc/snmp/snmpd.conf && ! -f /etc/snmp/snmpd.conf.orig ]] \
+    && cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.orig
+mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
+systemctl restart snmpd
+echo "  OK: snmpd.conf applied (community: $SNMP_COMMUNITY)"
+
+# ── smart.config (PVE only — auto-detect drives) ─────────────────────────────
+if [[ "$MODE" == "pve" ]]; then
+    SMART_CFG="/etc/snmp/smart.config"
+    if [[ ! -f "$SMART_CFG" ]]; then
+        wget -qO "$SMART_CFG" "$REPO_MODE/monitoring/smart.config"
+        mkdir -p /var/cache/smart
+        # Auto-detect SATA/NVMe drives and append to config
+        while IFS= read -r _dev; do
+            _name="$(basename "$_dev")"
+            if [[ "$_dev" == *nvme* ]]; then
+                echo "$_name $_dev -d nvme" >> "$SMART_CFG"
+            else
+                echo "$_name $_dev -d sat" >> "$SMART_CFG"
+            fi
+        done < <(lsblk -dno NAME,TYPE /dev/sd* /dev/nvme* 2>/dev/null \
+            | awk '$2=="disk"{print "/dev/"$1}')
+        echo "  OK: smart.config written with detected drives"
+    else
+        echo "  SKIP: smart.config already present"
+    fi
+fi
+
+# ── snmptrapd.conf ────────────────────────────────────────────────────────────
+if [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
+    [[ -f /etc/snmp/snmptrapd.conf ]] \
+        && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
+    wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
+    sed -i "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" /tmp/snmptrapd.conf.new
+    mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
+    echo "  OK: snmptrapd.conf applied"
+fi
+
+# ── collectd.conf ─────────────────────────────────────────────────────────────
+if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
+    wget -qO /tmp/collectd.conf.new "$REPO_MODE/monitoring/collectd.conf"
+    sed -i \
+        -e "s|COLLECTD_HOSTNAME|$COLLECTD_HOSTNAME|g" \
+        -e "s|COLLECTD_SERVER|$COLLECTD_SERVER|g" \
+        /tmp/collectd.conf.new
+    [[ -f /etc/collectd/collectd.conf && ! -f /etc/collectd/collectd.conf.orig ]] \
+        && cp /etc/collectd/collectd.conf /etc/collectd/collectd.conf.orig
+    mkdir -p /etc/collectd/collectd.conf.d
+    mv /tmp/collectd.conf.new /etc/collectd/collectd.conf
+    systemctl restart collectd
+    echo "  OK: collectd.conf applied (→ $COLLECTD_SERVER)"
+else
+    echo "  SKIP: collectd server not set — collectd.conf not deployed"
 fi
 
 # =============================================================================
