@@ -1,6 +1,6 @@
-# === Proxmox-hardened SSHD Config ===
-# Port 22: Proxmox cluster only (firewall-restricted)
-# Port 2211: Admin key-only access
+# === Proxmox VE SSHD Config ===
+# Port 22: required for PVE cluster traffic (restrict via external firewall)
+# Port 2211: admin key-only access
 
 Port 22
 Port 2211

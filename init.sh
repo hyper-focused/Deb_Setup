@@ -295,7 +295,7 @@ SSHD="/etc/ssh/sshd_config"
 [[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] \
     && cp "$SSHD" "${SSHD}.orig" \
     && echo "  Backed up original sshd_config"
-wget -qO "${SSHD}.new" "$REPO_COMMON/sshd_config"
+wget -qO "${SSHD}.new" "$REPO_MODE/sshd_config"
 if sshd -t -f "${SSHD}.new" 2>/dev/null; then
     mv "${SSHD}.new" "$SSHD"
     systemctl reload sshd
