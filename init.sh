@@ -41,33 +41,35 @@ warn() { echo "  WARNING: $*"; FAILURES+=("$*"); }
 # ── Package lists ─────────────────────────────────────────────────────────────
 
 # Installed on both PVE and Debian
+# Note: packages pre-installed by PVE (pve-manager/qemu-server deps, Debian standard task)
+# are omitted here and listed in DEBIAN_EXTRA_PKGS instead.
 COMMON_PKGS=(
     # Shell & terminal
     bash-completion btop htop screen tmux
 
     # Text / file tools
-    bat bc delta fd-find fzf jq lzop pv
+    bat bc delta fd-find fzf jq pv
     ripgrep shfmt sqlite3 tree ugrep unzip
-    vivid w3m wget whois xz-utils yamllint yq zip zstd
+    vivid w3m whois xz-utils yamllint yq zip
 
     # Network
-    bind9-dnsutils curl ethtool fail2ban ipset lsof mtr
-    net-tools nethogs nload nmap rsync snmp snmpd
-    snmp-mibs-downloader socat tcpdump traceroute
+    curl ethtool fail2ban ipset lsof mtr
+    net-tools nethogs nload nmap snmp snmpd
+    snmp-mibs-downloader tcpdump
 
     # System
-    chrony duf gdisk iperf3 lsb-release
-    mosh parted pigz plocate psmisc strace sysstat xfsprogs
+    duf iperf3 lsb-release
+    mosh parted pigz plocate strace sysstat xfsprogs
 
     # Dev & scripting
-    build-essential git gnupg pipx
+    build-essential git pipx
 
     # Monitoring (both modes send to collectd server, get polled via SNMP)
     collectd
     snmptrapd
 
     # Misc
-    dtach man-db nano ncdu starship tig zoxide
+    dtach nano ncdu starship tig zoxide
 )
 
 # PVE-only extras  (bare metal)
@@ -123,8 +125,23 @@ PVE_EXTRA_PKGS=(
 )
 
 # Debian-only extras  (QEMU VM)
+# Includes packages that are pre-installed by PVE but absent on a minimal Debian install
 DEBIAN_EXTRA_PKGS=(
     qemu-guest-agent   # essential: proper shutdown, snapshots, IP reporting
+
+    # Pre-installed on PVE (pve-manager / qemu-server / Debian standard task deps)
+    bind9-dnsutils  # dig, nslookup, host
+    chrony          # NTP daemon
+    gdisk           # GPT disk partitioning
+    gnupg           # GPG / apt key management
+    lzop            # lzop compression
+    man-db          # man page viewer
+    psmisc          # killall, fuser, pstree
+    rsync           # file sync
+    socat           # socket relay
+    traceroute      # network path tracing
+    wget            # HTTP downloads (used throughout this script)
+    zstd            # fast compression
 )
 
 # ── Step counter ──────────────────────────────────────────────────────────────
