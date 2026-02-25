@@ -19,18 +19,14 @@ $golang\
 $nodejs\
 $php\
 $java\
-$kotlin\
 $haskell\
 $python\
 $package\
 $docker_context\
-$kubernetes\
 $shell\
 $container\
 $jobs\
 ${custom.memory_usage}\
-${custom.battery}\
-${custom.keyboard_layout}\
 $time\
 $cmd_duration\
 $status\
@@ -46,10 +42,10 @@ color_ok = 'bright-green'
 color_danger = 'bright-red'
 color_caution = 'bright-yellow'
 
-color_os = 'red'
-color_username = 'red'
-color_directory = 'yellow'
-color_git = 'cyan'
+color_os = 'white'
+color_username = 'bright-blue'
+color_directory = 'bright-cyan'
+color_git = 'yellow'
 color_git_added = 'bright-green'
 color_git_deleted = 'bright-red'
 color_env = 'blue'
@@ -58,8 +54,8 @@ color_docker = 'blue'
 color_shell = ''
 color_container = ''
 color_other = ''
-color_time = ''
-color_duration = ''
+color_time = 'magenta'
+color_duration = 'yellow'
 
 color_vimcmd_ok = 'green'
 color_vimcmd_replace = 'purple'
@@ -154,8 +150,8 @@ style = "fg:color_directory"
 read_only_style = "fg:color_directory"
 repo_root_style = "bold fg:color_directory"
 format = "[ $path ]($style)"
-read_only = " "
-home_symbol = "~"
+home_symbol = "🏠"
+read_only = "🔒 "
 truncation_symbol = "…/"
 truncation_length = 0
 truncate_to_repo = true
@@ -239,7 +235,12 @@ style = "fg:color_env"
 format = '( [$symbol( $version)]($style) )'
 
 [php]
-symbol = ""
+symbol = "🐘"
+style = "fg:color_env"
+format = '( [$symbol( $version)]($style) )'
+
+[perl]
+symbol = "🐪"
 style = "fg:color_env"
 format = '( [$symbol( $version)]($style) )'
 
@@ -259,7 +260,7 @@ style = "fg:color_env"
 format = '( [$symbol( $version)]($style) )'
 
 [python]
-symbol = ""
+symbol = "🐍"
 style = "fg:color_env"
 format = '( [$symbol( $version)( $virtualenv)]($style) )'
 version_format = '${raw}'
@@ -314,7 +315,7 @@ command = "starship module memory_usage"
 when = '[ "${STARSHIP_COCKPIT_MEMORY_USAGE_ENABLED:-false}" = "true" ]'
 shell = "sh"
 format = "( $output )"
-disabled = false
+disabled = true
 
 [memory_usage]
 threshold = 0
@@ -322,42 +323,6 @@ symbol = "󰓅"
 style = "fg:color_other"
 format = '( [$symbol( ${ram})]($style) )'
 disabled = false
-
-[custom.battery]
-command = """
-battery_info=$(starship module battery)
-if [ -n "$battery_info" ]; then
-    percent=$(echo "$battery_info" | grep -o '[0-9]*%' | sed 's/%//')
-    if [ "$percent" -le "${STARSHIP_COCKPIT_BATTERY_THRESHOLD:-0}" ]; then
-        echo "$battery_info" | sed 's/%%/%/'
-    fi
-fi
-"""
-when = '[ "${STARSHIP_COCKPIT_BATTERY_ENABLED:-false}" = "true" ]'
-shell = "sh"
-format = "( $output )"
-disabled = false
-
-[battery]
-full_symbol = "󰁹"
-charging_symbol = "󰂄"
-discharging_symbol = "󰂃"
-unknown_symbol = "󰂑"
-empty_symbol = "󰂎"
-format = '( [$symbol( $percentage)]($style) )'
-disabled = false
-
-[[battery.display]]
-threshold = 10
-style = "bold fg:color_danger"
-
-[[battery.display]]
-threshold = 20
-style = "fg:color_caution"
-
-[[battery.display]]
-threshold = 100
-style = "fg:color_other"
 
 [time]
 disabled = false
@@ -397,28 +362,3 @@ vimcmd_symbol = '[❮](bold fg:color_vimcmd_ok)'
 vimcmd_replace_one_symbol = '[❮](bold fg:color_vimcmd_replace)'
 vimcmd_replace_symbol = '[❮](bold fg:color_vimcmd_replace)'
 vimcmd_visual_symbol = '[❮](bold fg:color_vimcmd_visual)'
-
-[custom.keyboard_layout]
-command = """
-
-# Set env variables if you want to use layout aliases (in uppercase)
-#     export STARSHIP_COCKPIT_KEYBOARD_LAYOUT_ABC=ENG
-#     export STARSHIP_COCKPIT_KEYBOARD_LAYOUT_UKRAINIAN=UKR
-# 
-# Implementations:
-#     macOS
-
-if [ "$(uname -s)" = "Darwin" ]; then
-        input_source=$(defaults read ~/Library/Preferences/com.apple.HIToolbox.plist AppleCurrentKeyboardLayoutInputSourceID)
-        layout_id=$(echo "$input_source" | cut -d '.' -f4)
-        layout=$(printenv "STARSHIP_COCKPIT_KEYBOARD_LAYOUT_$(echo "$layout_id" | tr '[:lower:]' '[:upper:]')")
-        echo "$layout" || echo "$layout_id"
-fi
-
-"""
-symbol = "󰌌"
-style = "fg:color_other"
-format = '( [$symbol $output]($style) )'
-when = '[ "${STARSHIP_COCKPIT_KEYBOARD_LAYOUT_ENABLED:-false}" = "true" ]'
-shell = "sh"
-disabled = false

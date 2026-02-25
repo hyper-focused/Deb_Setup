@@ -158,81 +158,88 @@ step() {
 # 1. System update
 # =============================================================================
 step "System update"
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade
+# ── Enable non-free + non-free-firmware ───────────────────────────────────────
+# Required for: snmp-mibs-downloader, intel-microcode, amd64-microcode, firmware-*
+if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
+    if ! grep -q 'non-free' /etc/apt/sources.list.d/debian.sources 2>/dev/null; then
+        sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list.d/debian.sources
+        echo "  Enabled: contrib non-free non-free-firmware (debian.sources)"
+    else
+        echo "  SKIP: non-free already enabled"
+    fi
+elif [[ -f /etc/apt/sources.list ]]; then
+    if ! grep -qE '\bnon-free\b' /etc/apt/sources.list 2>/dev/null; then
+        sed -i '/^deb / s/ main$/ main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list
+        echo "  Enabled: contrib non-free non-free-firmware (sources.list)"
+    else
+        echo "  SKIP: non-free already enabled"
+    fi
+fi
+apt-get -q update
+DEBIAN_FRONTEND=noninteractive apt-get -y -q full-upgrade
 
 # =============================================================================
 # 2. Package installation
 # =============================================================================
 step "Common packages (${#COMMON_PKGS[@]})"
 echo "  Installing ${#COMMON_PKGS[@]} packages..."
-if ! DEBIAN_FRONTEND=noninteractive apt-get -y install "${COMMON_PKGS[@]}"; then
+if ! DEBIAN_FRONTEND=noninteractive apt-get -y -q install "${COMMON_PKGS[@]}" 2>/dev/null; then
     echo "  Batch install failed — retrying individually..."
     for _pkg in "${COMMON_PKGS[@]}"; do
-        if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
-            echo "  OK: $_pkg"
-        else
-            warn "Package unavailable: $_pkg"
-        fi
+        DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null \
+            || warn "Package unavailable: $_pkg"
     done
 fi
-echo "  OK: common packages done"
 
 if [[ "$MODE" == "pve" ]]; then
     step "PVE-specific packages (${#PVE_EXTRA_PKGS[@]}, bare metal)"
+    _pve_ok=0; _pve_fail=0
     for _pkg in "${PVE_EXTRA_PKGS[@]}"; do
         if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
-            echo "  OK: $_pkg"
+            _pve_ok=$((_pve_ok + 1))
         else
             warn "Package unavailable: $_pkg"
+            _pve_fail=$((_pve_fail + 1))
         fi
     done
+    echo "  OK: $_pve_ok installed, $_pve_fail failed"
     # Initialise hardware sensor detection (non-interactive, updates /etc/modules)
-    echo "  Running sensors-detect..."
-    if sensors-detect --auto > /dev/null 2>&1; then
-        echo "  OK: sensors-detect completed"
-    else
-        warn "sensors-detect failed — run manually when convenient"
-    fi
+    sensors-detect --auto > /dev/null 2>&1 \
+        || warn "sensors-detect failed — run manually when convenient"
 else
     step "Debian-specific packages (QEMU VM)"
-    # Check if qemu-guest-agent is already running before we install
     _qga_was_active=false
     systemctl is-active --quiet qemu-guest-agent 2>/dev/null && _qga_was_active=true
+    _deb_ok=0; _deb_fail=0
     for _pkg in "${DEBIAN_EXTRA_PKGS[@]}"; do
         if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install "$_pkg" 2>/dev/null; then
-            echo "  OK: $_pkg"
+            _deb_ok=$((_deb_ok + 1))
         else
             warn "Package unavailable: $_pkg"
+            _deb_fail=$((_deb_fail + 1))
         fi
     done
-    # Only enable if it wasn't already running (Debian template may pre-enable it)
+    echo "  OK: $_deb_ok installed, $_deb_fail failed"
     if [[ "$_qga_was_active" == "false" ]]; then
-        if systemctl enable --now qemu-guest-agent 2>/dev/null; then
-            echo "  OK: qemu-guest-agent enabled"
-        else
-            warn "qemu-guest-agent enable failed — may already be handled by VM template"
-        fi
-    else
-        echo "  SKIP: qemu-guest-agent already active"
+        systemctl enable --now qemu-guest-agent 2>/dev/null \
+            || warn "qemu-guest-agent enable failed — may already be handled by VM template"
     fi
 fi
 
-# fail2ban is installed but intentionally left unconfigured
-# Default jail watches port 22; needs a local override for port 2211
-NEEDS_ATTENTION+=("Configure fail2ban: create /etc/fail2ban/jail.d/sshd.conf to protect port 2211")
+# fail2ban: disable until manually configured (default jail watches port 22)
+systemctl disable --now fail2ban 2>/dev/null || true
+echo "  NOTE: fail2ban disabled — configure jail.d/sshd.conf for port 2211 first"
+NEEDS_ATTENTION+=("Configure fail2ban: create /etc/fail2ban/jail.d/sshd.conf to protect port 2211, then: systemctl enable --now fail2ban")
 
 # =============================================================================
 # 3. bat config
 # =============================================================================
 step "bat config"
 mkdir -p /root/.config/bat
-if [[ ! -f /root/.config/bat/config ]]; then
-    wget -qO /root/.config/bat/config "$REPO_COMMON/bat/config"
-    echo "  OK: bat config installed"
-else
-    echo "  SKIP: bat config already present"
-fi
+[[ ! -f /root/.config/bat/config ]] \
+    && wget -qO /root/.config/bat/config "$REPO_COMMON/bat/config"
 
 # =============================================================================
 # 4. bat-extras  (batgrep, batdiff, batman, batwatch, etc.)
@@ -240,12 +247,10 @@ fi
 step "bat-extras"
 if ! command -v batgrep &>/dev/null; then
     _tmp="$(mktemp -d)"
-    git clone --depth=1 https://github.com/eth-p/bat-extras.git "$_tmp"
-    bash "$_tmp/build.sh" --install --prefix=/usr/local
+    git clone -q --depth=1 https://github.com/eth-p/bat-extras.git "$_tmp"
+    bash "$_tmp/build.sh" --install --prefix=/usr/local > /dev/null
     rm -rf "$_tmp"
     echo "  OK: bat-extras installed"
-else
-    echo "  SKIP: bat-extras already installed"
 fi
 
 # =============================================================================
@@ -253,12 +258,8 @@ fi
 # =============================================================================
 step "Starship config"
 mkdir -p /root/.config
-if [[ ! -f /root/.config/starship.toml ]]; then
-    wget -qO /root/.config/starship.toml "$REPO_COMMON/starship.toml"
-    echo "  OK: starship.toml installed"
-else
-    echo "  SKIP: starship.toml already present"
-fi
+[[ ! -f /root/.config/starship.toml ]] \
+    && wget -qO /root/.config/starship.toml "$REPO_COMMON/starship.toml"
 
 # =============================================================================
 # 6. NVM + Node LTS + Direnv  [PVE only]
@@ -266,28 +267,22 @@ fi
 if [[ "$MODE" == "pve" ]]; then
     step "NVM + Node LTS"
     if [[ ! -d ~/.nvm ]]; then
-        git clone https://github.com/nvm-sh/nvm.git ~/.nvm
+        git clone -q https://github.com/nvm-sh/nvm.git ~/.nvm
         export NVM_DIR="$HOME/.nvm"
         # shellcheck source=/dev/null
         . "$NVM_DIR/nvm.sh"
         nvm install --lts || warn "NVM LTS install failed"
         echo "  OK: NVM + Node LTS installed"
-    else
-        echo "  SKIP: NVM already installed"
     fi
 
     step "Direnv"
     if ! command -v direnv &>/dev/null; then
         _tmp="$(mktemp -d)"
-        git clone https://github.com/direnv/direnv.git "$_tmp"
-        (cd "$_tmp" && make install) || warn "Direnv build failed"
+        git clone -q https://github.com/direnv/direnv.git "$_tmp"
+        (cd "$_tmp" && make -s install) || warn "Direnv build failed"
         rm -rf "$_tmp"
         echo "  OK: Direnv installed"
-    else
-        echo "  SKIP: Direnv already installed"
     fi
-else
-    step "NVM + Direnv — skipped (Debian mode)"
 fi
 
 # =============================================================================
@@ -301,10 +296,8 @@ if [[ ! -d "$FONT_DIR" ]] || [[ -z "$(ls -A "$FONT_DIR" 2>/dev/null)" ]]; then
         "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/FiraCode.zip"
     unzip -qo "$FONT_DIR/FiraCode.zip" -d "$FONT_DIR"
     rm "$FONT_DIR/FiraCode.zip"
-    fc-cache -fv
+    fc-cache -f
     echo "  OK: FiraCode Nerd Font installed"
-else
-    echo "  SKIP: FiraCode already installed"
 fi
 
 # =============================================================================
@@ -313,14 +306,12 @@ fi
 step "nano syntax highlighting"
 if [[ ! -d /root/.nano/.git ]]; then
     [[ -d /root/.nano ]] && rm -rf /root/.nano
-    git clone https://github.com/scopatz/nanorc.git /root/.nano
+    git clone -q https://github.com/scopatz/nanorc.git /root/.nano
     printf "# nano syntax — auto-generated by init.sh\n" > /root/.nanorc
     for f in /root/.nano/*.nanorc; do
         [[ -f "$f" ]] && printf 'include "%s"\n' "$f" >> /root/.nanorc
     done
     echo "  OK: nano syntax installed"
-else
-    echo "  SKIP: nano syntax already installed"
 fi
 
 # =============================================================================
@@ -328,34 +319,23 @@ fi
 # =============================================================================
 step "Configs from repo"
 
-# .bashrc
-[[ -f /root/.bashrc && ! -f /root/.bashrc.orig ]] \
-    && cp /root/.bashrc /root/.bashrc.orig \
-    && echo "  Backed up existing .bashrc → .bashrc.orig"
+# .bashrc + dotfiles
+[[ -f /root/.bashrc && ! -f /root/.bashrc.orig ]] && cp /root/.bashrc /root/.bashrc.orig
 wget -qO /root/.bashrc "$REPO_COMMON/.bashrc"
-echo "  OK: .bashrc installed"
-
-# Dotfiles deployed to /root/
 for _dotfile in .tmux.conf .gitconfig .vimrc; do
     wget -qO "/root/$_dotfile" "$REPO_COMMON/$_dotfile"
-    echo "  OK: $_dotfile installed"
 done
+echo "  OK: .bashrc + dotfiles"
 
-# htop
-mkdir -p /root/.config/htop
-wget -qO /root/.config/htop/htoprc "$REPO_COMMON/htop/htoprc"
-echo "  OK: htop/htoprc installed"
-
-# btop
-mkdir -p /root/.config/btop
+# htop + btop
+mkdir -p /root/.config/htop /root/.config/btop
+wget -qO /root/.config/htop/htoprc  "$REPO_COMMON/htop/htoprc"
 wget -qO /root/.config/btop/btop.conf "$REPO_COMMON/btop/btop.conf"
-echo "  OK: btop/btop.conf installed"
+echo "  OK: htop + btop configs"
 
 # sshd_config
 SSHD="/etc/ssh/sshd_config"
-[[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] \
-    && cp "$SSHD" "${SSHD}.orig" \
-    && echo "  Backed up original sshd_config"
+[[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] && cp "$SSHD" "${SSHD}.orig"
 wget -qO "${SSHD}.new" "$REPO_MODE/sshd_config"
 if sshd -t -f "${SSHD}.new" 2>/dev/null; then
     mv "${SSHD}.new" "$SSHD"
@@ -363,7 +343,7 @@ if sshd -t -f "${SSHD}.new" 2>/dev/null; then
     echo "  OK: sshd_config applied and reloaded"
 else
     rm -f "${SSHD}.new"
-    echo "  WARNING: sshd_config validation failed — keeping original"
+    warn "sshd_config validation failed — keeping original"
 fi
 
 # =============================================================================
@@ -392,8 +372,6 @@ if [[ "$MODE" == "pve" ]]; then
     else
         warn "zram config failed — check /etc/default/zramswap"
     fi
-else
-    step "zram config — skipped (Debian VM: memory managed by PVE host ballooning)"
 fi
 
 # =============================================================================
@@ -401,23 +379,8 @@ fi
 # =============================================================================
 step "Monitoring setup"
 
-# snmp-mibs-downloader lives in non-free; enable the component if absent
-if ! grep -rqE '\bnon-free\b' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null; then
-    echo "  Enabling non-free repo (required for snmp-mibs-downloader)..."
-    if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
-        sed -i 's/^Components: main.*/Components: main contrib non-free non-free-firmware/' \
-            /etc/apt/sources.list.d/debian.sources
-    else
-        sed -i '/^deb / s/ main$/ main contrib non-free non-free-firmware/' \
-            /etc/apt/sources.list
-    fi
-    apt-get update -q
-fi
-if DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/dev/null; then
-    echo "  OK: snmp-mibs-downloader"
-else
-    warn "snmp-mibs-downloader unavailable — SNMP MIB names will show as numeric OIDs"
-fi
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/dev/null \
+    || warn "snmp-mibs-downloader unavailable — SNMP MIB names will show as numeric OIDs"
 
 # Collect values needed for config substitution
 echo ""
@@ -489,36 +452,31 @@ COMMON_EXTENDS="linux_softnet_stat chrony osupdate"
 PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py rrdcached"
 
 # Extend scripts run as root but are readable by the snmp group for auditing
-for _script in $COMMON_EXTENDS; do
+_all_extends="$COMMON_EXTENDS"
+[[ "$MODE" == "pve" ]] && _all_extends="$_all_extends $PVE_EXTENDS"
+_ext_ok=0
+for _script in $_all_extends; do
     if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
         install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
-        echo "  OK: extend $_script"
+        _ext_ok=$((_ext_ok + 1))
     else
-        echo "  WARNING: extend script not found: $_script"
+        warn "extend script not found: $_script"
     fi
 done
-
-if [[ "$MODE" == "pve" ]]; then
-    for _script in $PVE_EXTENDS; do
-        if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
-            install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
-            echo "  OK: extend $_script"
-        else
-            echo "  WARNING: extend script not found: $_script"
-        fi
-    done
-fi
+echo "  OK: $_ext_ok extend scripts installed"
 
 # ── check_mk agent-local plugins ─────────────────────────────────────────────
 PLUGIN_LIST_URL="$REPO_MODE/monitoring/checkmk-plugins"
 _plugin_list="$(wget -qO- "$PLUGIN_LIST_URL" | grep -v '^#' | grep -v '^$' | awk '{print $1}')"
+_plg_ok=0
 for _plugin in $_plugin_list; do
     if [[ -f "$AGENT_DIR/agent-local/$_plugin" ]]; then
         install -m 755 -o root -g root "$AGENT_DIR/agent-local/$_plugin" \
             "/usr/lib/check_mk_agent/local/$_plugin"
-        echo "  OK: check_mk plugin $_plugin"
+        _plg_ok=$((_plg_ok + 1))
     fi
 done
+echo "  OK: $_plg_ok check_mk plugins installed"
 
 # ── snmpd.conf ────────────────────────────────────────────────────────────────
 wget -qO /tmp/snmpd.conf.new "$REPO_MODE/monitoring/snmpd.conf"
@@ -536,8 +494,11 @@ if [[ -s /tmp/snmpd.conf.new ]] \
     mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
     chown root:Debian-snmp /etc/snmp/snmpd.conf
     chmod 640 /etc/snmp/snmpd.conf
-    systemctl restart snmpd
-    echo "  OK: snmpd.conf applied (community: $SNMP_COMMUNITY)"
+    if systemctl enable snmpd 2>/dev/null && systemctl restart snmpd 2>/dev/null; then
+        echo "  OK: snmpd.conf applied and restarted (community: $SNMP_COMMUNITY)"
+    else
+        warn "snmpd failed to restart — check: journalctl -xeu snmpd"
+    fi
 else
     rm -f /tmp/snmpd.conf.new
     echo "  WARNING: snmpd.conf validation failed — original kept"
@@ -550,7 +511,6 @@ if [[ "$MODE" == "pve" ]]; then
     if [[ ! -f "$SMART_CFG" ]]; then
         wget -qO "$SMART_CFG" "$REPO_MODE/monitoring/smart.config"
         mkdir -p /var/cache/smart
-        # Auto-detect SATA/NVMe drives and append to config
         while IFS= read -r _dev; do
             _name="$(basename "$_dev")"
             if [[ "$_dev" == *nvme* ]]; then
@@ -564,8 +524,6 @@ if [[ "$MODE" == "pve" ]]; then
         chmod 640 "$SMART_CFG"
         echo "  OK: smart.config written with detected drives"
         NEEDS_ATTENTION+=("Verify auto-detected drive list in /etc/snmp/smart.config")
-    else
-        echo "  SKIP: smart.config already present"
     fi
 fi
 
@@ -578,7 +536,11 @@ if [[ "$MODE" == "pve" ]] && [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
     mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
     chown root:Debian-snmp /etc/snmp/snmptrapd.conf
     chmod 640 /etc/snmp/snmptrapd.conf
-    echo "  OK: snmptrapd.conf applied"
+    if systemctl enable --now snmptrapd 2>/dev/null; then
+        echo "  OK: snmptrapd.conf applied and service enabled"
+    else
+        warn "snmptrapd failed to start — check: journalctl -xeu snmptrapd"
+    fi
 fi
 
 # ── collectd.conf ─────────────────────────────────────────────────────────────
@@ -592,8 +554,12 @@ if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
         && cp /etc/collectd/collectd.conf /etc/collectd/collectd.conf.orig
     mkdir -p /etc/collectd/collectd.conf.d
     mv /tmp/collectd.conf.new /etc/collectd/collectd.conf
-    systemctl restart collectd
-    echo "  OK: collectd.conf applied (→ $COLLECTD_SERVER)"
+    if systemctl enable collectd 2>/dev/null && systemctl restart collectd 2>/dev/null; then
+        echo "  OK: collectd.conf applied and restarted (→ $COLLECTD_SERVER)"
+    else
+        warn "collectd failed to restart — check: journalctl -xeu collectd"
+        NEEDS_ATTENTION+=("collectd failed to start — fix /etc/collectd/collectd.conf then: systemctl restart collectd")
+    fi
 else
     echo "  SKIP: collectd server not set — collectd.conf not deployed"
     NEEDS_ATTENTION+=("Configure collectd: edit /etc/collectd/collectd.conf with LibreNMS server IP")
@@ -603,9 +569,8 @@ fi
 # Cleanup
 # =============================================================================
 step "Cleanup"
-apt-get autoremove -y > /dev/null
-apt-get clean
-echo "  OK: apt cache cleaned"
+apt-get autoremove -y -qq > /dev/null 2>&1
+apt-get clean -q
 
 # =============================================================================
 # Done

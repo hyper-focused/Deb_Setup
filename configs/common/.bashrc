@@ -20,11 +20,11 @@ if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
 fi
 
 # ── Colors — ls, grep, less ───────────────────────────────────────────────────
-export LS_COLORS="$(vivid generate molokai 2>/dev/null || true)"
+export LS_COLORS="$(vivid generate snazzy 2>/dev/null || true)"
 export LS_OPTIONS='--color=auto --group-directories-first'
 alias ls='ls $LS_OPTIONS'
-alias dir='dir --color=auto'
-alias vdir='vdir --color=auto'
+alias dir='dir --color=auto --group-directories-first'
+alias vdir='vdir --color=auto --group-directories-first'
 alias grep='grep --color=auto'
 alias fgrep='fgrep --color=auto'
 alias egrep='egrep --color=auto'
@@ -43,10 +43,10 @@ export EDITOR=nano
 export VISUAL=nano
 
 # ── bat aliases ───────────────────────────────────────────────────────────────
-if command -v bat &>/dev/null; then
-    alias cat='bat --color=auto'
-elif command -v batcat &>/dev/null; then
+if command -v batcat &>/dev/null; then
     alias cat='batcat --color=auto'
+elif command -v bat &>/dev/null; then
+    alias cat='bat --color=auto'
 fi
 
 # ── bat-extras ────────────────────────────────────────────────────────────────
