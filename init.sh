@@ -38,6 +38,32 @@ FAILURES=()
 NEEDS_ATTENTION=()
 warn() { echo "  WARNING: $*"; FAILURES+=("$*"); }
 
+# ── Pre-install state — captured before any packages are installed ─────────────
+# Used by confirm_overwrite: don't prompt when the package was just freshly
+# installed by this script (its config is still at the distro default).
+_pkg_installed() { dpkg -l "$1" 2>/dev/null | grep -q "^ii"; }
+_pre_sshd=false;     _pkg_installed openssh-server && _pre_sshd=true
+_pre_snmpd=false;    _pkg_installed snmpd          && _pre_snmpd=true
+_pre_snmptrapd=false; _pkg_installed snmptrapd     && _pre_snmptrapd=true
+_pre_collectd=false; _pkg_installed collectd        && _pre_collectd=true
+_pre_zram=false;     _pkg_installed zram-tools      && _pre_zram=true
+
+# Prompt before overwriting an existing config file.
+# $1 = destination path  $2 = label for prompt  $3 = was-pre-installed (true/false)
+# Returns 0 (proceed) when: file absent, or package was just installed (fresh),
+#   or user answers y.  Returns 1 (skip) when user declines.
+confirm_overwrite() {
+    local dst="$1" label="${2:-$1}" pre="${3:-true}"
+    [[ ! -f "$dst" ]] && return 0
+    [[ "$pre" == "false" ]] && return 0
+    local _ans
+    read -rp "  $label already exists — overwrite? [y/N]: " _ans
+    case "$_ans" in
+        y|Y|yes|YES) return 0 ;;
+        *) echo "  SKIP: keeping existing $label"; return 1 ;;
+    esac
+}
+
 # ── Package lists ─────────────────────────────────────────────────────────────
 
 # Installed on both PVE and Debian
@@ -335,15 +361,17 @@ echo "  OK: htop + btop configs"
 
 # sshd_config
 SSHD="/etc/ssh/sshd_config"
-[[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] && cp "$SSHD" "${SSHD}.orig"
-wget -qO "${SSHD}.new" "$REPO_MODE/sshd_config"
-if sshd -t -f "${SSHD}.new" 2>/dev/null; then
-    mv "${SSHD}.new" "$SSHD"
-    systemctl reload sshd
-    echo "  OK: sshd_config applied and reloaded"
-else
-    rm -f "${SSHD}.new"
-    warn "sshd_config validation failed — keeping original"
+if confirm_overwrite "$SSHD" "sshd_config" "$_pre_sshd"; then
+    [[ -f "$SSHD" && ! -f "${SSHD}.orig" ]] && cp "$SSHD" "${SSHD}.orig"
+    wget -qO "${SSHD}.new" "$REPO_MODE/sshd_config"
+    if sshd -t -f "${SSHD}.new" 2>/dev/null; then
+        mv "${SSHD}.new" "$SSHD"
+        systemctl reload sshd
+        echo "  OK: sshd_config applied and reloaded"
+    else
+        rm -f "${SSHD}.new"
+        warn "sshd_config validation failed — keeping original"
+    fi
 fi
 
 # =============================================================================
@@ -351,11 +379,13 @@ fi
 # =============================================================================
 step "sysctl tuning"
 _sysctl_dst="/etc/sysctl.d/99-init.conf"
-if wget -qO "$_sysctl_dst" "$REPO_MODE/sysctl.conf" 2>/dev/null \
-    && sysctl --system > /dev/null; then
-    echo "  OK: sysctl tuning applied → $_sysctl_dst"
-else
-    warn "sysctl tuning failed — $_sysctl_dst may be incomplete"
+if confirm_overwrite "$_sysctl_dst" "sysctl.conf (99-init.conf)"; then
+    if wget -qO "$_sysctl_dst" "$REPO_MODE/sysctl.conf" 2>/dev/null \
+        && sysctl --system > /dev/null; then
+        echo "  OK: sysctl tuning applied → $_sysctl_dst"
+    else
+        warn "sysctl tuning failed — $_sysctl_dst may be incomplete"
+    fi
 fi
 
 # =============================================================================
@@ -364,13 +394,15 @@ fi
 if [[ "$MODE" == "pve" ]]; then
     step "zram config (PVE)"
     _zram_cfg="/etc/default/zramswap"
-    [[ -f "$_zram_cfg" && ! -f "${_zram_cfg}.orig" ]] \
-        && cp "$_zram_cfg" "${_zram_cfg}.orig"
-    if wget -qO "$_zram_cfg" "$REPO_MODE/zramswap" 2>/dev/null \
-        && systemctl restart zramswap 2>/dev/null; then
-        echo "  OK: zramswap configured (lz4, 25% RAM)"
-    else
-        warn "zram config failed — check /etc/default/zramswap"
+    if confirm_overwrite "$_zram_cfg" "zramswap" "$_pre_zram"; then
+        [[ -f "$_zram_cfg" && ! -f "${_zram_cfg}.orig" ]] \
+            && cp "$_zram_cfg" "${_zram_cfg}.orig"
+        if wget -qO "$_zram_cfg" "$REPO_MODE/zramswap" 2>/dev/null \
+            && systemctl restart zramswap 2>/dev/null; then
+            echo "  OK: zramswap configured (lz4, 25% RAM)"
+        else
+            warn "zram config failed — check /etc/default/zramswap"
+        fi
     fi
 fi
 
@@ -479,30 +511,32 @@ done
 echo "  OK: $_plg_ok check_mk plugins installed"
 
 # ── snmpd.conf ────────────────────────────────────────────────────────────────
-wget -qO /tmp/snmpd.conf.new "$REPO_MODE/monitoring/snmpd.conf"
-sed -i \
-    -e "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" \
-    -e "s|SYSLOCATION|$SYS_LOCATION|g" \
-    -e "s|SYSCONTACT|$SYS_CONTACT|g" \
-    /tmp/snmpd.conf.new
-# Validate: file must be non-empty and all placeholders substituted
-if [[ -s /tmp/snmpd.conf.new ]] \
-    && grep -q "^com2sec" /tmp/snmpd.conf.new \
-    && ! grep -qE 'SNMP_COMMUNITY|SYSLOCATION|SYSCONTACT' /tmp/snmpd.conf.new; then
-    [[ -f /etc/snmp/snmpd.conf && ! -f /etc/snmp/snmpd.conf.orig ]] \
-        && cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.orig
-    mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
-    chown root:Debian-snmp /etc/snmp/snmpd.conf
-    chmod 640 /etc/snmp/snmpd.conf
-    if systemctl enable snmpd 2>/dev/null && systemctl restart snmpd 2>/dev/null; then
-        echo "  OK: snmpd.conf applied and restarted (community: $SNMP_COMMUNITY)"
+if confirm_overwrite /etc/snmp/snmpd.conf "snmpd.conf" "$_pre_snmpd"; then
+    wget -qO /tmp/snmpd.conf.new "$REPO_MODE/monitoring/snmpd.conf"
+    sed -i \
+        -e "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" \
+        -e "s|SYSLOCATION|$SYS_LOCATION|g" \
+        -e "s|SYSCONTACT|$SYS_CONTACT|g" \
+        /tmp/snmpd.conf.new
+    # Validate: file must be non-empty and all placeholders substituted
+    if [[ -s /tmp/snmpd.conf.new ]] \
+        && grep -q "^com2sec" /tmp/snmpd.conf.new \
+        && ! grep -qE 'SNMP_COMMUNITY|SYSLOCATION|SYSCONTACT' /tmp/snmpd.conf.new; then
+        [[ -f /etc/snmp/snmpd.conf && ! -f /etc/snmp/snmpd.conf.orig ]] \
+            && cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.orig
+        mv /tmp/snmpd.conf.new /etc/snmp/snmpd.conf
+        chown root:Debian-snmp /etc/snmp/snmpd.conf
+        chmod 640 /etc/snmp/snmpd.conf
+        if systemctl enable snmpd 2>/dev/null && systemctl restart snmpd 2>/dev/null; then
+            echo "  OK: snmpd.conf applied and restarted (community: $SNMP_COMMUNITY)"
+        else
+            warn "snmpd failed to restart — check: journalctl -xeu snmpd"
+        fi
     else
-        warn "snmpd failed to restart — check: journalctl -xeu snmpd"
+        rm -f /tmp/snmpd.conf.new
+        echo "  WARNING: snmpd.conf validation failed — original kept"
+        NEEDS_ATTENTION+=("Fix /etc/snmp/snmpd.conf — validation failed, original preserved")
     fi
-else
-    rm -f /tmp/snmpd.conf.new
-    echo "  WARNING: snmpd.conf validation failed — original kept"
-    NEEDS_ATTENTION+=("Fix /etc/snmp/snmpd.conf — validation failed, original preserved")
 fi
 
 # ── smart.config (PVE only — auto-detect drives) ─────────────────────────────
@@ -528,37 +562,41 @@ if [[ "$MODE" == "pve" ]]; then
 fi
 
 # ── snmptrapd.conf (PVE only — Debian VMs don't receive traps) ───────────────
-if [[ "$MODE" == "pve" ]] && [[ ! -f /etc/snmp/snmptrapd.conf.orig ]]; then
-    [[ -f /etc/snmp/snmptrapd.conf ]] \
-        && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
-    wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
-    sed -i "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" /tmp/snmptrapd.conf.new
-    mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
-    chown root:Debian-snmp /etc/snmp/snmptrapd.conf
-    chmod 640 /etc/snmp/snmptrapd.conf
-    if systemctl enable --now snmptrapd 2>/dev/null; then
-        echo "  OK: snmptrapd.conf applied and service enabled"
-    else
-        warn "snmptrapd failed to start — check: journalctl -xeu snmptrapd"
+if [[ "$MODE" == "pve" ]]; then
+    if confirm_overwrite /etc/snmp/snmptrapd.conf "snmptrapd.conf" "$_pre_snmptrapd"; then
+        [[ -f /etc/snmp/snmptrapd.conf && ! -f /etc/snmp/snmptrapd.conf.orig ]] \
+            && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
+        wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
+        sed -i "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" /tmp/snmptrapd.conf.new
+        mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
+        chown root:Debian-snmp /etc/snmp/snmptrapd.conf
+        chmod 640 /etc/snmp/snmptrapd.conf
+        if systemctl enable --now snmptrapd 2>/dev/null; then
+            echo "  OK: snmptrapd.conf applied and service enabled"
+        else
+            warn "snmptrapd failed to start — check: journalctl -xeu snmptrapd"
+        fi
     fi
 fi
 
 # ── collectd.conf ─────────────────────────────────────────────────────────────
 if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
-    wget -qO /tmp/collectd.conf.new "$REPO_MODE/monitoring/collectd.conf"
-    sed -i \
-        -e "s|COLLECTD_HOSTNAME|$COLLECTD_HOSTNAME|g" \
-        -e "s|COLLECTD_SERVER|$COLLECTD_SERVER|g" \
-        /tmp/collectd.conf.new
-    [[ -f /etc/collectd/collectd.conf && ! -f /etc/collectd/collectd.conf.orig ]] \
-        && cp /etc/collectd/collectd.conf /etc/collectd/collectd.conf.orig
-    mkdir -p /etc/collectd/collectd.conf.d
-    mv /tmp/collectd.conf.new /etc/collectd/collectd.conf
-    if systemctl enable collectd 2>/dev/null && systemctl restart collectd 2>/dev/null; then
-        echo "  OK: collectd.conf applied and restarted (→ $COLLECTD_SERVER)"
-    else
-        warn "collectd failed to restart — check: journalctl -xeu collectd"
-        NEEDS_ATTENTION+=("collectd failed to start — fix /etc/collectd/collectd.conf then: systemctl restart collectd")
+    if confirm_overwrite /etc/collectd/collectd.conf "collectd.conf" "$_pre_collectd"; then
+        wget -qO /tmp/collectd.conf.new "$REPO_MODE/monitoring/collectd.conf"
+        sed -i \
+            -e "s|COLLECTD_HOSTNAME|$COLLECTD_HOSTNAME|g" \
+            -e "s|COLLECTD_SERVER|$COLLECTD_SERVER|g" \
+            /tmp/collectd.conf.new
+        [[ -f /etc/collectd/collectd.conf && ! -f /etc/collectd/collectd.conf.orig ]] \
+            && cp /etc/collectd/collectd.conf /etc/collectd/collectd.conf.orig
+        mkdir -p /etc/collectd/collectd.conf.d
+        mv /tmp/collectd.conf.new /etc/collectd/collectd.conf
+        if systemctl enable collectd 2>/dev/null && systemctl restart collectd 2>/dev/null; then
+            echo "  OK: collectd.conf applied and restarted (→ $COLLECTD_SERVER)"
+        else
+            warn "collectd failed to restart — check: journalctl -xeu collectd"
+            NEEDS_ATTENTION+=("collectd failed to start — fix /etc/collectd/collectd.conf then: systemctl restart collectd")
+        fi
     fi
 else
     echo "  SKIP: collectd server not set — collectd.conf not deployed"
