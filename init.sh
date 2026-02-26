@@ -383,8 +383,18 @@ fi
 step "rsyslog remote forwarding"
 _rsyslog_dst="/etc/rsyslog.d/99-remote.conf"
 _deploy_rsyslog=true
-confirm_overwrite "$_rsyslog_dst" "rsyslog-remote.conf" "$_pre_rsyslog" \
-    || _deploy_rsyslog=false
+if [[ -f "$_rsyslog_dst" ]]; then
+    # Drop-in already exists: use standard overwrite check
+    confirm_overwrite "$_rsyslog_dst" "rsyslog-remote.conf" "$_pre_rsyslog" \
+        || _deploy_rsyslog=false
+elif [[ "$_pre_rsyslog" == "true" ]]; then
+    # rsyslog pre-installed but no drop-in yet: explicit opt-in
+    read -rp "  rsyslog is already installed — configure remote forwarding? [y/N]: " _ans
+    case "$_ans" in
+        y|Y|yes|YES) ;;
+        *) echo "  SKIP: rsyslog remote forwarding not configured"; _deploy_rsyslog=false ;;
+    esac
+fi
 
 if [[ "$_deploy_rsyslog" == "true" ]]; then
     echo ""
@@ -464,17 +474,40 @@ step "Monitoring setup"
 DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/dev/null \
     || warn "snmp-mibs-downloader unavailable — SNMP MIB names will show as numeric OIDs"
 
-# Collect values needed for config substitution
-echo ""
-read -rp "  SNMP community string [default: public]: " SNMP_COMMUNITY
-SNMP_COMMUNITY="${SNMP_COMMUNITY:-public}"
-read -rp "  sysLocation (e.g. 'DC1 Rack 4'): " SYS_LOCATION
-SYS_LOCATION="${SYS_LOCATION:-Unknown}"
-read -rp "  sysContact (e.g. 'noc@example.com'): " SYS_CONTACT
-SYS_CONTACT="${SYS_CONTACT:-root@localhost}"
-read -rp "  Collectd / LibreNMS server IP: " COLLECTD_SERVER
-COLLECTD_SERVER="${COLLECTD_SERVER:-127.0.0.1}"
+# ── Overwrite checks — before any parameter prompts ──────────────────────────
+_deploy_snmpd=true
+_deploy_snmptrapd=true
+_deploy_collectd=true
+confirm_overwrite /etc/snmp/snmpd.conf "snmpd.conf" "$_pre_snmpd" \
+    || _deploy_snmpd=false
+if [[ "$MODE" == "pve" ]]; then
+    confirm_overwrite /etc/snmp/snmptrapd.conf "snmptrapd.conf" "$_pre_snmptrapd" \
+        || _deploy_snmptrapd=false
+fi
+confirm_overwrite /etc/collectd/collectd.conf "collectd.conf" "$_pre_collectd" \
+    || _deploy_collectd=false
+
+# ── Parameters — only prompt for what will actually be deployed ───────────────
+SNMP_COMMUNITY="public"
+SYS_LOCATION="Unknown"
+SYS_CONTACT="root@localhost"
+COLLECTD_SERVER="127.0.0.1"
 COLLECTD_HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
+
+if [[ "$_deploy_snmpd" == "true" ]] || [[ "$_deploy_snmptrapd" == "true" ]]; then
+    echo ""
+    read -rp "  SNMP community string [default: public]: " SNMP_COMMUNITY
+    SNMP_COMMUNITY="${SNMP_COMMUNITY:-public}"
+    read -rp "  sysLocation (e.g. 'DC1 Rack 4'): " SYS_LOCATION
+    SYS_LOCATION="${SYS_LOCATION:-Unknown}"
+    read -rp "  sysContact (e.g. 'noc@example.com'): " SYS_CONTACT
+    SYS_CONTACT="${SYS_CONTACT:-root@localhost}"
+fi
+
+if [[ "$_deploy_collectd" == "true" ]]; then
+    read -rp "  Collectd / LibreNMS server IP: " COLLECTD_SERVER
+    COLLECTD_SERVER="${COLLECTD_SERVER:-127.0.0.1}"
+fi
 
 # ── LibreNMS agent — pinned to commit SHA from librenms-agent.pin ─────────────
 AGENT_DIR="/opt/librenms-agent"
@@ -561,7 +594,7 @@ done
 echo "  OK: $_plg_ok check_mk plugins installed"
 
 # ── snmpd.conf ────────────────────────────────────────────────────────────────
-if confirm_overwrite /etc/snmp/snmpd.conf "snmpd.conf" "$_pre_snmpd"; then
+if [[ "$_deploy_snmpd" == "true" ]]; then
     wget -qO /tmp/snmpd.conf.new "$REPO_MODE/monitoring/snmpd.conf"
     sed -i \
         -e "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" \
@@ -613,7 +646,7 @@ fi
 
 # ── snmptrapd.conf (PVE only — Debian VMs don't receive traps) ───────────────
 if [[ "$MODE" == "pve" ]]; then
-    if confirm_overwrite /etc/snmp/snmptrapd.conf "snmptrapd.conf" "$_pre_snmptrapd"; then
+    if [[ "$_deploy_snmptrapd" == "true" ]]; then
         [[ -f /etc/snmp/snmptrapd.conf && ! -f /etc/snmp/snmptrapd.conf.orig ]] \
             && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
         wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
@@ -630,8 +663,8 @@ if [[ "$MODE" == "pve" ]]; then
 fi
 
 # ── collectd.conf ─────────────────────────────────────────────────────────────
-if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
-    if confirm_overwrite /etc/collectd/collectd.conf "collectd.conf" "$_pre_collectd"; then
+if [[ "$_deploy_collectd" == "true" ]]; then
+    if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
         wget -qO /tmp/collectd.conf.new "$REPO_MODE/monitoring/collectd.conf"
         sed -i \
             -e "s|COLLECTD_HOSTNAME|$COLLECTD_HOSTNAME|g" \
@@ -647,10 +680,10 @@ if [[ -n "$COLLECTD_SERVER" && "$COLLECTD_SERVER" != "127.0.0.1" ]]; then
             warn "collectd failed to restart — check: journalctl -xeu collectd"
             NEEDS_ATTENTION+=("collectd failed to start — fix /etc/collectd/collectd.conf then: systemctl restart collectd")
         fi
+    else
+        echo "  SKIP: collectd server not set — collectd.conf not deployed"
+        NEEDS_ATTENTION+=("Configure collectd: edit /etc/collectd/collectd.conf with LibreNMS server IP")
     fi
-else
-    echo "  SKIP: collectd server not set — collectd.conf not deployed"
-    NEEDS_ATTENTION+=("Configure collectd: edit /etc/collectd/collectd.conf with LibreNMS server IP")
 fi
 
 # =============================================================================
