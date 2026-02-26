@@ -99,6 +99,27 @@ PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826) and `s
 - Port **22**: kept open on PVE for cluster traffic; must be restricted at external firewall
 - Port **2211**: key-only admin access (both modes); fail2ban must be configured for this port
 
+### confirm_overwrite pattern
+
+Service config deployments call `confirm_overwrite dst label pre` before downloading:
+
+- **File absent** → proceed silently (first run, no existing config to protect)
+- **`pre=false`** (package was just installed by this script) → proceed silently (config is still at distro default)
+- **`pre=true`** (package was already installed before the script ran) → prompt `[y/N]`
+
+Pre-install state is captured into `_pre_*` booleans (via `dpkg -l`) at script start, before any `apt-get install`. Packages tracked: `openssh-server`, `snmpd`, `snmptrapd`, `collectd`, `zram-tools`.
+
+When adding a new config deployment, follow this pattern:
+```bash
+_pre_foo=false; _pkg_installed foo && _pre_foo=true   # near top with other _pre_* lines
+...
+if confirm_overwrite /etc/foo/foo.conf "foo.conf" "$_pre_foo"; then
+    # download, substitute, validate, move
+fi
+```
+
+For files with no owning package (e.g. `/etc/sysctl.d/99-init.conf`), omit the third argument — `confirm_overwrite` defaults to prompting whenever the file exists.
+
 ### Conventions
 
 - `set -euo pipefail` throughout; all errors exit via the `ERR` trap
