@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+# /usr/lib/check_mk_agent/local/temperature
+# CPU and system temperature checks via lm-sensors.
+# Deployed by hyper-focused/Deb_Setup — replaces the upstream plugin which is
+# an incomplete template requiring the deprecated hddtemp utility.
+# Requires: lm-sensors package (sensors command), sensors-detect already run.
+
+import json
+import subprocess
+import sys
+
+
+def main():
+    try:
+        raw = subprocess.check_output(
+            ["sensors", "-j"], stderr=subprocess.DEVNULL, timeout=10
+        )
+        data = json.loads(raw)
+    except FileNotFoundError:
+        print("3 Temperature - - sensors not found; install lm-sensors and run sensors-detect")
+        sys.exit(0)
+    except subprocess.TimeoutExpired:
+        print("3 Temperature - - sensors command timed out")
+        sys.exit(0)
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        print(f"3 Temperature - - sensors failed: {exc}")
+        sys.exit(0)
+
+    for chip, chip_data in data.items():
+        if not isinstance(chip_data, dict):
+            continue
+        # Shorten chip label: drop bus address suffix (e.g. coretemp-isa-0000 → coretemp)
+        chip_label = chip.rsplit("-", 2)[0] if chip.count("-") >= 2 else chip
+        for sensor, sensor_data in chip_data.items():
+            if sensor == "Adapter" or not isinstance(sensor_data, dict):
+                continue
+            temp = warn = crit = None
+            for key, val in sensor_data.items():
+                if key.endswith("_input"):
+                    temp = float(val)
+                elif key.endswith("_max"):
+                    warn = float(val)
+                elif key.endswith("_crit") and not key.endswith("_crit_alarm"):
+                    crit = float(val)
+            if temp is None:
+                continue
+
+            svc = f"Temp_{chip_label}_{sensor}".replace(" ", "_")
+
+            if crit is not None and temp >= crit:
+                status, state = 2, "CRIT"
+            elif warn is not None and temp >= warn:
+                status, state = 1, "WARN"
+            else:
+                status, state = 0, "OK"
+
+            perf_warn = f"{warn:.0f}" if warn is not None else ""
+            perf_crit = f"{crit:.0f}" if crit is not None else ""
+            perf = f"temp={temp:.1f};{perf_warn};{perf_crit};;"
+
+            parts = []
+            if warn is not None:
+                parts.append(f"warn {warn:.0f}°C")
+            if crit is not None:
+                parts.append(f"crit {crit:.0f}°C")
+            thresholds = f" ({', '.join(parts)})" if parts else ""
+
+            print(f"{status} {svc} {perf} {state} - {temp:.1f}°C{thresholds}")
+
+
+if __name__ == "__main__":
+    main()

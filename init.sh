@@ -561,18 +561,22 @@ echo "  OK: check_mk socket service configured"
 install -m 755 -o root -g root "$AGENT_DIR/snmp/distro" /usr/bin/distro
 
 # Core extends — both modes
-COMMON_EXTENDS="linux_softnet_stat chrony osupdate"
+# Note: entropy is named entropy.sh in the agent repo; .sh is stripped on install
+COMMON_EXTENDS="linux_softnet_stat chrony osupdate entropy.sh"
 
 # PVE bare-metal extras (services always present on a PVE install)
-PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux.py rrdcached"
+# Note: rrdcached lives in agent-local only (no snmp extend); zfs-linux has no .py extension
+PVE_EXTENDS="smart postfix-queues postfixdetailed zfs zfs-linux"
 
 # Extend scripts run as root but are readable by the snmp group for auditing
+# Strip .sh suffix so installed name matches snmpd.conf extend directives
 _all_extends="$COMMON_EXTENDS"
 [[ "$MODE" == "pve" ]] && _all_extends="$_all_extends $PVE_EXTENDS"
 _ext_ok=0
 for _script in $_all_extends; do
+    _dst="${_script%.sh}"
     if [[ -f "$AGENT_DIR/snmp/$_script" ]]; then
-        install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_script"
+        install -m 755 -o root -g Debian-snmp "$AGENT_DIR/snmp/$_script" "/etc/snmp/$_dst"
         _ext_ok=$((_ext_ok + 1))
     else
         warn "extend script not found: $_script"
@@ -585,13 +589,31 @@ PLUGIN_LIST_URL="$REPO_MODE/monitoring/checkmk-plugins"
 _plugin_list="$(wget -qO- "$PLUGIN_LIST_URL" | grep -v '^#' | grep -v '^$' | awk '{print $1}')"
 _plg_ok=0
 for _plugin in $_plugin_list; do
-    if [[ -f "$AGENT_DIR/agent-local/$_plugin" ]]; then
+    if [[ "$_plugin" == "temperature" ]]; then
+        # Upstream plugin is an incomplete template — use our curated version
+        if wget -qO "/usr/lib/check_mk_agent/local/$_plugin" \
+            "$REPO_MODE/monitoring/$_plugin" 2>/dev/null; then
+            chmod 755 "/usr/lib/check_mk_agent/local/$_plugin"
+            _plg_ok=$((_plg_ok + 1))
+        else
+            warn "temperature plugin download failed"
+        fi
+    elif [[ -f "$AGENT_DIR/agent-local/$_plugin" ]]; then
         install -m 755 -o root -g root "$AGENT_DIR/agent-local/$_plugin" \
             "/usr/lib/check_mk_agent/local/$_plugin"
         _plg_ok=$((_plg_ok + 1))
     fi
 done
 echo "  OK: $_plg_ok check_mk plugins installed"
+
+# Patch proxmox plugin: upstream hardcodes Europe/Amsterdam timezone
+if [[ -f "/usr/lib/check_mk_agent/local/proxmox" ]]; then
+    _tz="$(timedatectl show -p Timezone --value 2>/dev/null \
+        || cat /etc/timezone 2>/dev/null || echo 'UTC')"
+    sed -i "s|TIMEZONE => 'Europe/Amsterdam'|TIMEZONE => '$_tz'|" \
+        "/usr/lib/check_mk_agent/local/proxmox"
+    echo "  OK: proxmox plugin timezone set to $_tz"
+fi
 
 # ── snmpd.conf ────────────────────────────────────────────────────────────────
 if [[ "$_deploy_snmpd" == "true" ]]; then
