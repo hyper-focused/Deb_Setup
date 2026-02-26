@@ -606,14 +606,8 @@ for _plugin in $_plugin_list; do
 done
 echo "  OK: $_plg_ok check_mk plugins installed"
 
-# Patch proxmox plugin: upstream hardcodes Europe/Amsterdam timezone
-if [[ -f "/usr/lib/check_mk_agent/local/proxmox" ]]; then
-    _tz="$(timedatectl show -p Timezone --value 2>/dev/null \
-        || cat /etc/timezone 2>/dev/null || echo 'UTC')"
-    sed -i "s|TIMEZONE => 'Europe/Amsterdam'|TIMEZONE => '$_tz'|" \
-        "/usr/lib/check_mk_agent/local/proxmox"
-    echo "  OK: proxmox plugin timezone set to $_tz"
-fi
+# Note: upstream proxmox plugin had a hardcoded TIMEZONE constant that was
+# never used — removed via PR to librenms/librenms-agent.
 
 # ── snmpd.conf ────────────────────────────────────────────────────────────────
 if [[ "$_deploy_snmpd" == "true" ]]; then
