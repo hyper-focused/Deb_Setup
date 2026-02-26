@@ -10,7 +10,7 @@ A single-script post-install setup for **Proxmox VE 9** (bare metal) and **Debia
 bash <(curl -fsSL https://raw.githubusercontent.com/hyper-focused/Deb_Setup/main/init.sh)
 ```
 
-The script prompts for OS mode (`pve` or `debian`) then fully configures packages, dotfiles, monitoring, and SSH.
+The script prompts for OS mode (`pve` or `debian`) then fully configures packages, dotfiles, SSH, rsyslog remote forwarding, sysctl tuning, and a full monitoring stack (SNMP + check_mk + collectd).
 
 ## Linting / validation
 
@@ -38,7 +38,7 @@ There is no automated test suite. Validate config files by deploying to a VM and
 
 ```
 configs/
-  common/          # Deployed to both modes
+  common/                  # Deployed to both modes
     .bashrc
     .gitconfig
     .tmux.conf
@@ -47,7 +47,8 @@ configs/
     bat/config
     htop/htoprc
     btop/btop.conf
-  pve/             # Proxmox VE (bare metal) only
+    rsyslog-remote.conf    # Template for /etc/rsyslog.d/99-remote.conf
+  pve/                     # Proxmox VE (bare metal) only
     sshd_config
     sysctl.conf
     zramswap
@@ -55,9 +56,10 @@ configs/
       snmpd.conf
       snmptrapd.conf
       collectd.conf
-      smart.config       # skeleton; init.sh appends auto-detected drives
-      checkmk-plugins    # list of agent-local plugin names to install
-  debian/          # Debian 13 QEMU VM only
+      smart.config         # Skeleton; init.sh appends auto-detected drives
+      checkmk-plugins      # List of agent-local plugin names to install
+      temperature          # Curated check_mk plugin (upstream is incomplete template)
+  debian/                  # Debian 13 QEMU VM only
     sshd_config
     sysctl.conf
     monitoring/
@@ -87,14 +89,25 @@ After substitution, `init.sh` validates the result (non-empty, no remaining plac
 ### Monitoring stack
 
 All hosts ship two monitoring paths:
-- **SNMP** via `snmpd` — LibreNMS polls this; extend scripts come from `librenms/librenms-agent` at the SHA pinned in `librenms-agent.pin`
+- **SNMP** via `snmpd` — LibreNMS polls this; extend scripts sourced from `librenms/librenms-agent` at the SHA pinned in `librenms-agent.pin`
 - **check_mk** via socket service — LibreNMS pulls agent-local plugins listed in `configs/<mode>/monitoring/checkmk-plugins`
 
 PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826) and `snmptrapd`.
 
-### librenms-agent pinning
+#### Extend scripts — hybrid sourcing
 
-`librenms-agent.pin` contains `SHA=` and `DATE=` for the exact commit of `librenms/librenms-agent` to clone. Update this file (not init.sh) when upgrading the agent. The init script fetches only that commit (`--depth=1 fetch <sha>`).
+Scripts in `COMMON_EXTENDS` and `PVE_EXTENDS` are installed from the librenms-agent clone. Key notes:
+- `entropy.sh` is the upstream filename; the install loop strips `.sh` so the destination is `/etc/snmp/entropy` (matching `snmpd.conf` extend directives). All other scripts have no extension.
+- `rrdcached` exists only in `agent-local/`, not `snmp/` — it is a check_mk plugin, not an SNMP extend.
+
+#### check_mk plugins — hybrid sourcing
+
+Most plugins install from the librenms-agent clone. Exceptions hosted in this repo:
+- **`temperature`** (`configs/pve/monitoring/temperature`) — upstream plugin is an incomplete `hddtemp` template. Our version uses `sensors -j` (lm-sensors) and outputs per-sensor warn/crit thresholds in check_mk local format.
+
+#### librenms-agent pinning
+
+`librenms-agent.pin` contains `SHA=` and `DATE=` for the exact commit of `librenms/librenms-agent` to clone. Update this file (not `init.sh`) when upgrading the agent. The init script fetches only that commit (`--depth=1 fetch <sha>`).
 
 ### SSH ports
 
@@ -103,13 +116,17 @@ PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826) and `s
 
 ### confirm_overwrite pattern
 
-Service config deployments call `confirm_overwrite dst label pre` before downloading:
+Service config deployments use `confirm_overwrite dst label pre` to avoid silently clobbering custom configs:
 
-- **File absent** → proceed silently (first run, no existing config to protect)
-- **`pre=false`** (package was just installed by this script) → proceed silently (config is still at distro default)
-- **`pre=true`** (package was already installed before the script ran) → prompt `[y/N]`
+- **File absent** → proceed silently (first run, nothing to protect)
+- **`pre=false`** (package just installed by this script) → proceed silently (still at distro default)
+- **`pre=true`** (package was already installed before this script ran) → prompt `[y/N]`
 
-Pre-install state is captured into `_pre_*` booleans (via `dpkg -l`) at script start, before any `apt-get install`. Packages tracked: `openssh-server`, `snmpd`, `snmptrapd`, `collectd`, `zram-tools`.
+Pre-install state is captured into `_pre_*` booleans (via `dpkg -l`) at script start, before any `apt-get install`. Packages tracked: `openssh-server`, `rsyslog`, `snmpd`, `snmptrapd`, `collectd`, `zram-tools`.
+
+**Prompt ordering rule**: overwrite checks always run *before* parameter prompts. In the monitoring step, all three `confirm_overwrite` calls happen at the top of the step; SNMP and collectd parameter prompts are skipped entirely if the corresponding configs won't be deployed.
+
+**rsyslog special case**: when the drop-in (`/etc/rsyslog.d/99-remote.conf`) is absent but rsyslog is pre-installed, an explicit opt-in prompt ("configure remote forwarding? [y/N]") is shown before asking for server IP and severity. This is because the drop-in is a new addition, not an overwrite.
 
 When adding a new config deployment, follow this pattern:
 ```bash
