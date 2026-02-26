@@ -42,11 +42,12 @@ warn() { echo "  WARNING: $*"; FAILURES+=("$*"); }
 # Used by confirm_overwrite: don't prompt when the package was just freshly
 # installed by this script (its config is still at the distro default).
 _pkg_installed() { dpkg -l "$1" 2>/dev/null | grep -q "^ii"; }
-_pre_sshd=false;     _pkg_installed openssh-server && _pre_sshd=true
-_pre_snmpd=false;    _pkg_installed snmpd          && _pre_snmpd=true
-_pre_snmptrapd=false; _pkg_installed snmptrapd     && _pre_snmptrapd=true
-_pre_collectd=false; _pkg_installed collectd        && _pre_collectd=true
-_pre_zram=false;     _pkg_installed zram-tools      && _pre_zram=true
+_pre_sshd=false;      _pkg_installed openssh-server && _pre_sshd=true
+_pre_rsyslog=false;   _pkg_installed rsyslog        && _pre_rsyslog=true
+_pre_snmpd=false;     _pkg_installed snmpd          && _pre_snmpd=true
+_pre_snmptrapd=false; _pkg_installed snmptrapd      && _pre_snmptrapd=true
+_pre_collectd=false;  _pkg_installed collectd       && _pre_collectd=true
+_pre_zram=false;      _pkg_installed zram-tools     && _pre_zram=true
 
 # Prompt before overwriting an existing config file.
 # $1 = destination path  $2 = label for prompt  $3 = was-pre-installed (true/false)
@@ -92,6 +93,9 @@ COMMON_PKGS=(
 
     # Monitoring (both modes send to collectd server, get polled via SNMP)
     collectd
+
+    # Logging
+    rsyslog
 
     # Misc
     dtach nano ncdu starship tig zoxide
@@ -143,7 +147,6 @@ PVE_EXTRA_PKGS=(
 
     # PVE-specific
     # (proxmox-firewall omitted: tech-preview Recommends only; pve-firewall is pre-installed)
-    rsyslog
     virt-manager
     virtiofsd
     xterm
@@ -375,7 +378,54 @@ if confirm_overwrite "$SSHD" "sshd_config" "$_pre_sshd"; then
 fi
 
 # =============================================================================
-# 10. sysctl tuning
+# 10. rsyslog remote forwarding
+# =============================================================================
+step "rsyslog remote forwarding"
+_rsyslog_dst="/etc/rsyslog.d/99-remote.conf"
+_deploy_rsyslog=true
+confirm_overwrite "$_rsyslog_dst" "rsyslog-remote.conf" "$_pre_rsyslog" \
+    || _deploy_rsyslog=false
+
+if [[ "$_deploy_rsyslog" == "true" ]]; then
+    echo ""
+    read -rp "  Remote syslog server IP (leave blank to skip): " RSYSLOG_SERVER
+    if [[ -n "$RSYSLOG_SERVER" ]]; then
+        echo "  Select minimum severity to forward to remote server:"
+        echo "    1) debug   — everything (debug and up)"
+        echo "    2) info    — informational and up"
+        echo "    3) notice  — notice and up"
+        echo "    4) warning — warnings and up [default]"
+        echo "    5) err     — errors and up"
+        echo "    6) crit    — critical and up"
+        echo ""
+        read -rp "  Choice [1-6, default 4]: " _sev_choice
+        case "$_sev_choice" in
+            1) RSYSLOG_SEVERITY="debug"   ;;
+            2) RSYSLOG_SEVERITY="info"    ;;
+            3) RSYSLOG_SEVERITY="notice"  ;;
+            5) RSYSLOG_SEVERITY="err"     ;;
+            6) RSYSLOG_SEVERITY="crit"    ;;
+            *) RSYSLOG_SEVERITY="warning" ;;
+        esac
+        wget -qO /tmp/rsyslog-remote.conf.new "$REPO_COMMON/rsyslog-remote.conf"
+        sed -i \
+            -e "s|RSYSLOG_SERVER|$RSYSLOG_SERVER|g" \
+            -e "s|RSYSLOG_SEVERITY|$RSYSLOG_SEVERITY|g" \
+            /tmp/rsyslog-remote.conf.new
+        mv /tmp/rsyslog-remote.conf.new "$_rsyslog_dst"
+        if systemctl restart rsyslog 2>/dev/null; then
+            echo "  OK: rsyslog configured — *.$RSYSLOG_SEVERITY → $RSYSLOG_SERVER:514 (UDP)"
+        else
+            warn "rsyslog failed to restart — check: journalctl -xeu rsyslog"
+        fi
+    else
+        echo "  SKIP: no remote server set — rsyslog-remote.conf not deployed"
+        NEEDS_ATTENTION+=("Configure rsyslog forwarding: create /etc/rsyslog.d/99-remote.conf")
+    fi
+fi
+
+# =============================================================================
+# 11. sysctl tuning
 # =============================================================================
 step "sysctl tuning"
 _sysctl_dst="/etc/sysctl.d/99-init.conf"
@@ -389,7 +439,7 @@ if confirm_overwrite "$_sysctl_dst" "sysctl.conf (99-init.conf)"; then
 fi
 
 # =============================================================================
-# 11. zram config  [PVE only]
+# 12. zram config  [PVE only]
 # =============================================================================
 if [[ "$MODE" == "pve" ]]; then
     step "zram config (PVE)"
@@ -407,7 +457,7 @@ if [[ "$MODE" == "pve" ]]; then
 fi
 
 # =============================================================================
-# 12. Monitoring — LibreNMS agent, SNMP extends, collectd
+# 13. Monitoring — LibreNMS agent, SNMP extends, collectd
 # =============================================================================
 step "Monitoring setup"
 

@@ -79,6 +79,8 @@ Config files use ALL_CAPS placeholders that `init.sh` replaces with `sed -i` bef
 | `SYSCONTACT` | Interactive prompt |
 | `COLLECTD_HOSTNAME` | `hostname -f` |
 | `COLLECTD_SERVER` | Interactive prompt |
+| `RSYSLOG_SERVER` | Interactive prompt |
+| `RSYSLOG_SEVERITY` | Interactive prompt (debug/info/notice/warning/err/crit) |
 
 After substitution, `init.sh` validates the result (non-empty, no remaining placeholders) before moving to the system path.
 
