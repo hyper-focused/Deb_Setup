@@ -502,12 +502,18 @@ DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/de
 _deploy_snmpd=true
 _deploy_snmptrapd=true
 _deploy_collectd=true
+[[ ! -f /etc/snmp/snmpd.conf ]] \
+    && echo "  snmpd.conf: not present — will deploy"
 confirm_overwrite /etc/snmp/snmpd.conf "snmpd.conf" "$_pre_snmpd" \
     || _deploy_snmpd=false
 if [[ "$MODE" == "pve" ]]; then
+    [[ ! -f /etc/snmp/snmptrapd.conf ]] \
+        && echo "  snmptrapd.conf: not present — will deploy"
     confirm_overwrite /etc/snmp/snmptrapd.conf "snmptrapd.conf" "$_pre_snmptrapd" \
         || _deploy_snmptrapd=false
 fi
+[[ ! -f /etc/collectd/collectd.conf ]] \
+    && echo "  collectd.conf: not present — will deploy"
 confirm_overwrite /etc/collectd/collectd.conf "collectd.conf" "$_pre_collectd" \
     || _deploy_collectd=false
 
