@@ -45,7 +45,6 @@ _pkg_installed() { dpkg -l "$1" 2>/dev/null | grep -q "^ii"; }
 _pre_sshd=false;      _pkg_installed openssh-server && _pre_sshd=true
 _pre_rsyslog=false;   _pkg_installed rsyslog        && _pre_rsyslog=true
 _pre_snmpd=false;     _pkg_installed snmpd          && _pre_snmpd=true
-_pre_snmptrapd=false; _pkg_installed snmptrapd      && _pre_snmptrapd=true
 _pre_collectd=false;  _pkg_installed collectd       && _pre_collectd=true
 _pre_zram=false;      _pkg_installed zram-tools     && _pre_zram=true
 
@@ -146,8 +145,7 @@ PVE_EXTRA_PKGS=(
     frr
     frr-pythontools
 
-    # Monitoring (PVE-extra: richer plugins, trapd)
-    snmptrapd
+    # Monitoring (PVE-extra: richer plugins)
     pflogsumm
 
     # Scripting & dev
@@ -500,18 +498,11 @@ DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/de
 
 # ── Overwrite checks — before any parameter prompts ──────────────────────────
 _deploy_snmpd=true
-_deploy_snmptrapd=true
 _deploy_collectd=true
 [[ ! -f /etc/snmp/snmpd.conf ]] \
     && echo "  snmpd.conf: not present — will deploy"
 confirm_overwrite /etc/snmp/snmpd.conf "snmpd.conf" "$_pre_snmpd" \
     || _deploy_snmpd=false
-if [[ "$MODE" == "pve" ]]; then
-    [[ ! -f /etc/snmp/snmptrapd.conf ]] \
-        && echo "  snmptrapd.conf: not present — will deploy"
-    confirm_overwrite /etc/snmp/snmptrapd.conf "snmptrapd.conf" "$_pre_snmptrapd" \
-        || _deploy_snmptrapd=false
-fi
 [[ ! -f /etc/collectd/collectd.conf ]] \
     && echo "  collectd.conf: not present — will deploy"
 confirm_overwrite /etc/collectd/collectd.conf "collectd.conf" "$_pre_collectd" \
@@ -524,7 +515,7 @@ SYS_CONTACT="root@localhost"
 COLLECTD_SERVER="127.0.0.1"
 COLLECTD_HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
 
-if [[ "$_deploy_snmpd" == "true" ]] || [[ "$_deploy_snmptrapd" == "true" ]]; then
+if [[ "$_deploy_snmpd" == "true" ]]; then
     echo ""
     read -rp "  SNMP community string [default: public]: " SNMP_COMMUNITY
     SNMP_COMMUNITY="${SNMP_COMMUNITY:-public}"
@@ -687,24 +678,6 @@ if [[ "$MODE" == "pve" ]]; then
         chmod 640 "$SMART_CFG"
         echo "  OK: smart.config written with detected drives"
         NEEDS_ATTENTION+=("Verify auto-detected drive list in /etc/snmp/smart.config")
-    fi
-fi
-
-# ── snmptrapd.conf (PVE only — Debian VMs don't receive traps) ───────────────
-if [[ "$MODE" == "pve" ]]; then
-    if [[ "$_deploy_snmptrapd" == "true" ]]; then
-        [[ -f /etc/snmp/snmptrapd.conf && ! -f /etc/snmp/snmptrapd.conf.orig ]] \
-            && cp /etc/snmp/snmptrapd.conf /etc/snmp/snmptrapd.conf.orig
-        wget -qO /tmp/snmptrapd.conf.new "$REPO_MODE/monitoring/snmptrapd.conf"
-        sed -i "s|SNMP_COMMUNITY|$SNMP_COMMUNITY|g" /tmp/snmptrapd.conf.new
-        mv /tmp/snmptrapd.conf.new /etc/snmp/snmptrapd.conf
-        chown root:Debian-snmp /etc/snmp/snmptrapd.conf
-        chmod 640 /etc/snmp/snmptrapd.conf
-        if systemctl enable --now snmptrapd 2>/dev/null; then
-            echo "  OK: snmptrapd.conf applied and service enabled"
-        else
-            warn "snmptrapd failed to start — check: journalctl -xeu snmptrapd"
-        fi
     fi
 fi
 

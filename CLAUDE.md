@@ -54,7 +54,6 @@ configs/
     zramswap
     monitoring/
       snmpd.conf
-      snmptrapd.conf
       collectd.conf
       smart.config         # Skeleton; init.sh appends auto-detected drives
       checkmk-plugins      # List of agent-local plugin names to install
@@ -92,7 +91,7 @@ All hosts ship two monitoring paths:
 - **SNMP** via `snmpd` — LibreNMS polls this; extend scripts sourced from `librenms/librenms-agent` at the SHA pinned in `librenms-agent.pin`
 - **check_mk** via socket service — LibreNMS pulls agent-local plugins listed in `configs/<mode>/monitoring/checkmk-plugins`
 
-PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826) and `snmptrapd`.
+PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826).
 
 #### Extend scripts — hybrid sourcing
 
@@ -122,9 +121,9 @@ Service config deployments use `confirm_overwrite dst label pre` to avoid silent
 - **`pre=false`** (package just installed by this script) → proceed silently (still at distro default)
 - **`pre=true`** (package was already installed before this script ran) → prompt `[y/N]`
 
-Pre-install state is captured into `_pre_*` booleans (via `dpkg -l`) at script start, before any `apt-get install`. Packages tracked: `openssh-server`, `rsyslog`, `snmpd`, `snmptrapd`, `collectd`, `zram-tools`.
+Pre-install state is captured into `_pre_*` booleans (via `dpkg -l`) at script start, before any `apt-get install`. Packages tracked: `openssh-server`, `rsyslog`, `snmpd`, `collectd`, `zram-tools`.
 
-**Prompt ordering rule**: overwrite checks always run *before* parameter prompts. In the monitoring step, all three `confirm_overwrite` calls happen at the top of the step; SNMP and collectd parameter prompts are skipped entirely if the corresponding configs won't be deployed.
+**Prompt ordering rule**: overwrite checks always run *before* parameter prompts. In the monitoring step, both `confirm_overwrite` calls happen at the top of the step; SNMP and collectd parameter prompts are skipped entirely if the corresponding configs won't be deployed.
 
 **rsyslog special case**: when the drop-in (`/etc/rsyslog.d/99-remote.conf`) is absent but rsyslog is pre-installed, an explicit opt-in prompt ("configure remote forwarding? [y/N]") is shown before asking for server IP and severity. This is because the drop-in is a new addition, not an overwrite.
 
