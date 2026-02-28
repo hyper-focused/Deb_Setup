@@ -80,19 +80,36 @@ COMMON_PKGS=(
     vivid w3m whois xz-utils yamllint yq zip
 
     # Network
-    curl ethtool fail2ban ipset lsof mtr
+    curl ethtool fail2ban inetutils-telnet ipset lsof mtr
     net-tools nethogs nload nmap snmp snmpd
     tcpdump
 
     # System
     duf iperf3 lsb-release
-    mosh parted pigz plocate strace sysstat xfsprogs
+    mosh ntfs-3g parted pigz plocate strace sysstat xfsprogs
 
     # Dev & scripting
     build-essential git pipx
+    python-is-python3   # bare 'python' not present by default on Debian 13 / PVE 9
+    python3-json5       # JSON5 parsing for Python scripts
+
+    # Perl modules for librenms-agent SNMP extend + check_mk scripts
+    # Non-core modules that have Debian packages; Statistics::Lite falls back to cpanm below
+    cpanminus
+    libconfig-tiny-perl
+    libdbi-perl
+    libfile-find-rule-perl
+    libfile-readbackwards-perl
+    libfile-slurp-perl
+    libio-compress-perl
+    libjson-perl
+    libstatistics-lite-perl
+    libstring-shellquote-perl
+    libwww-perl
 
     # Monitoring (both modes send to collectd server, get polled via SNMP)
     collectd
+    collectd-utils
 
     # Logging
     rsyslog
@@ -109,7 +126,6 @@ PVE_EXTRA_PKGS=(
     intel-microcode
     fdutils
     fio
-    inetutils-telnet
     ipmitool
     ipmiutil
     lm-sensors
@@ -124,25 +140,21 @@ PVE_EXTRA_PKGS=(
 
     # Storage & filesystem
     libguestfs-tools
-    ntfs-3g
 
     # Network & routing
     # (certbot omitted: PVE manages ACME/TLS certs via its own web UI)
     frr
     frr-pythontools
 
-    # Monitoring (PVE-extra: richer plugins, trapd, collectd-utils)
+    # Monitoring (PVE-extra: richer plugins, trapd)
     snmptrapd
-    collectd-utils
     pflogsumm
 
     # Scripting & dev
-    cpanminus
     cpuinfo
     cstream
     faketime
     imagemagick
-    python3-json5
     ruby
 
     # PVE-specific
@@ -255,6 +267,19 @@ else
         systemctl enable --now qemu-guest-agent 2>/dev/null \
             || warn "qemu-guest-agent enable failed — may already be handled by VM template"
     fi
+fi
+
+# CPAN fallback — Statistics::Lite has no Debian apt package
+# cpanminus was just installed above; --notest skips the test suite for speed
+if perl -e 'use Statistics::Lite' 2>/dev/null; then
+    echo "  SKIP: Statistics::Lite already available"
+elif command -v cpanm &>/dev/null; then
+    echo "  Installing Statistics::Lite via cpanm (no apt package available)..."
+    PERL_MM_USE_DEFAULT=1 cpanm --notest --quiet Statistics::Lite 2>/dev/null \
+        && echo "  OK: Statistics::Lite installed via cpanm" \
+        || warn "CPAN: Statistics::Lite install failed — run manually: cpanm Statistics::Lite"
+else
+    warn "Statistics::Lite unavailable — cpanm not found; check cpanminus install"
 fi
 
 # fail2ban: disable until manually configured (default jail watches port 22)
