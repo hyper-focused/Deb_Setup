@@ -492,8 +492,11 @@ fi
 # =============================================================================
 step "Monitoring setup"
 
-DEBIAN_FRONTEND=noninteractive apt-get -y -qq install snmp-mibs-downloader 2>/dev/null \
-    || warn "snmp-mibs-downloader unavailable — SNMP MIB names will show as numeric OIDs"
+# snmp-mibs-downloader is non-free and has a known regression in v1.7 (Debian 13/Trixie)
+# where MIB name resolution silently fails even after a successful install.
+# v1.8 may fix this but availability in Trixie stable is uncertain.
+# Flag for manual follow-up rather than silently install a broken package.
+NEEDS_ATTENTION+=("SNMP MIB resolution: install snmp-mibs-downloader manually and verify 'snmpwalk' shows OID names not numeric IDs — v1.7 (Trixie) has a known regression; v1.8 may be required")
 
 # ── Overwrite checks — before any parameter prompts ──────────────────────────
 _deploy_snmpd=true
