@@ -12,7 +12,11 @@ HISTFILESIZE=10000
 
 # ── Terminal ──────────────────────────────────────────────────────────────────
 export TERM=xterm-256color
-shopt -s checkwinsize
+shopt -s checkwinsize   # update LINES/COLUMNS after each command (SSH clients)
+# Immediate resize on SIGWINCH — critical for noVNC/HTML5 KVM consoles where
+# the window can be resized without a new command being run. Silently no-ops if
+# resize (xterm package) is not installed.
+trap 'command -v resize &>/dev/null && eval "$(resize 2>/dev/null)"' SIGWINCH
 
 # ── Debian chroot label ───────────────────────────────────────────────────────
 if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
