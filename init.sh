@@ -133,7 +133,6 @@ PVE_EXTRA_PKGS=(
     minicom
     nvme-cli
     nvtop
-    openipmi
     sg3-utils
     stress-ng
 
