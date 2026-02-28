@@ -155,7 +155,6 @@ PVE_EXTRA_PKGS=(
     cstream
     faketime
     imagemagick
-    ruby
 
     # PVE-specific
     # (proxmox-firewall omitted: tech-preview Recommends only; pve-firewall is pre-installed)
