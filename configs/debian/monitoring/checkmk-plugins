@@ -1,6 +1,4 @@
-# check_mk agent-local plugins — Debian 13 (QEMU VM)
-# Lines starting with # are skipped by init.sh
-# Each active line is a filename from /opt/librenms-agent/agent-local/
-
-dpkg      # Debian package state
-dmi       # VM DMI info (QEMU exposes via SMBIOS)
+# check_mk agent-local plugins — Debian 13 QEMU VM
+# Intentionally empty: VMs use SNMP extends only.
+# dpkg/dmi check_mk plugins are replaced by SNMP (osupdate, DMI extends, distro).
+# Re-enable check_mk on VMs only if you have a hard requirement for agent-local apps.

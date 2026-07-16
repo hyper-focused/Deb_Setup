@@ -1,10 +1,12 @@
 # check_mk agent-local plugins — Proxmox VE (bare metal)
-# Lines starting with # are skipped by init.sh
-# Each active line is a filename from /opt/librenms-agent/agent-local/
-# Exception: 'temperature' is served from configs/pve/monitoring/temperature (curated)
+# Prefer SNMP extends for generic host metrics. check_mk is required for:
+#   - LibreNMS Proxmox application (agent-local "proxmox" — PVE API; no SNMP path)
+#   - rrdcached / temperature extras
+# Lines starting with # are skipped by init.sh.
+# Exception: 'temperature' is served from configs/pve/monitoring/temperature
+# init.sh always force-includes "proxmox" on PVE even if this list is incomplete.
 
-dpkg        # Debian package state
-dmi         # Hardware DMI info
-proxmox     # PVE VMs/containers — status, CPU, memory, disk via PVE API
-rrdcached   # RRDcached stats (PVE uses for all graph storage)
-temperature # CPU/system temps via lm-sensors (curated — upstream is a template)
+proxmox     # REQUIRED: LibreNMS Proxmox app (VMs/CTs via PVE API) over check_mk
+rrdcached   # RRDcached STATS over unix socket
+temperature # CPU/system temps via lm-sensors (curated)
+

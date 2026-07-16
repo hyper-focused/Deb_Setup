@@ -11,7 +11,16 @@ HISTSIZE=5000
 HISTFILESIZE=10000
 
 # ── Terminal ──────────────────────────────────────────────────────────────────
-export TERM=xterm-256color
+# High color when safe; don't clobber serial/console or already-good client TERM.
+case "${TERM:-}" in
+    ''|dumb|unknown|vt100|vt220)
+        export TERM=xterm-256color
+        ;;
+    xterm)
+        export TERM=xterm-256color
+        ;;
+    # linux (VC), screen*, tmux*, rxvt*, *-256color, etc. — leave as-is
+esac
 shopt -s checkwinsize   # update LINES/COLUMNS after each command (SSH clients)
 # Immediate resize on SIGWINCH — critical for noVNC/HTML5 KVM consoles where
 # the window can be resized without a new command being run. Silently no-ops if
@@ -21,6 +30,15 @@ trap 'command -v resize &>/dev/null && eval "$(resize 2>/dev/null)"' SIGWINCH
 # ── Debian chroot label ───────────────────────────────────────────────────────
 if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
     debian_chroot=$(cat /etc/debian_chroot)
+fi
+
+# ── Completions ───────────────────────────────────────────────────────────────
+if [ -f /usr/share/bash-completion/bash_completion ]; then
+    # shellcheck source=/dev/null
+    . /usr/share/bash-completion/bash_completion
+elif [ -f /etc/bash_completion ]; then
+    # shellcheck source=/dev/null
+    . /etc/bash_completion
 fi
 
 # ── Colors — ls, grep, less ───────────────────────────────────────────────────
@@ -53,10 +71,28 @@ elif command -v bat &>/dev/null; then
     alias cat='bat --color=auto'
 fi
 
-# ── bat-extras ────────────────────────────────────────────────────────────────
-command -v batgrep &>/dev/null && alias grep='batgrep'
-command -v batdiff &>/dev/null && alias diff='batdiff'
-command -v batman  &>/dev/null && alias man='batman'
+# bat-extras — extra names only (do not replace grep/diff; CLI differs)
+command -v batgrep &>/dev/null && alias bgrep='batgrep'
+command -v batdiff &>/dev/null && alias bdiff='batdiff'
+command -v batman  &>/dev/null && alias bman='batman'
+
+# ── fzf ───────────────────────────────────────────────────────────────────────
+if command -v fzf &>/dev/null; then
+    if [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then
+        # shellcheck source=/dev/null
+        . /usr/share/doc/fzf/examples/key-bindings.bash
+    fi
+    if [ -f /usr/share/doc/fzf/examples/completion.bash ]; then
+        # shellcheck source=/dev/null
+        . /usr/share/doc/fzf/examples/completion.bash
+    fi
+fi
+
+# ── zoxide ────────────────────────────────────────────────────────────────────
+command -v zoxide &>/dev/null && eval "$(zoxide init bash)"
+
+# ── pipx ──────────────────────────────────────────────────────────────────────
+[ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH"
 
 # ── NVM (PVE only — harmless if not installed) ────────────────────────────────
 export NVM_DIR="$HOME/.nvm"

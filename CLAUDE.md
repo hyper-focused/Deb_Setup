@@ -42,7 +42,6 @@ configs/
     .bashrc
     .gitconfig
     .tmux.conf
-    .vimrc
     starship.toml
     bat/config
     htop/htoprc
@@ -87,22 +86,28 @@ After substitution, `init.sh` validates the result (non-empty, no remaining plac
 
 ### Monitoring stack
 
-All hosts ship two monitoring paths:
-- **SNMP** via `snmpd` — LibreNMS polls this; extend scripts sourced from `librenms/librenms-agent` at the SHA pinned in `librenms-agent.pin`
-- **check_mk** via socket service — LibreNMS pulls agent-local plugins listed in `configs/<mode>/monitoring/checkmk-plugins`
+**Preference: SNMP extends first.** check_mk is secondary and mainly for PVE-specific apps.
 
-PVE hosts additionally run `collectd` (push to LibreNMS server UDP 25826).
+| Path | Role |
+|------|------|
+| **SNMP** (`snmpd` + extends) | Primary LibreNMS poll path for both modes |
+| **collectd** | Push metrics to LibreNMS UDP 25826 (both modes; 60s interval) |
+| **check_mk** | PVE only by default: `proxmox`, `rrdcached`, `temperature`. Debian VMs default off |
 
-#### Extend scripts — hybrid sourcing
+Extend script lists live in `configs/<mode>/monitoring/snmp-extends` (not hardcoded in `init.sh`).  
+check_mk plugin lists live in `configs/<mode>/monitoring/checkmk-plugins`.
 
-Scripts in `COMMON_EXTENDS` and `PVE_EXTENDS` are installed from the librenms-agent clone. Key notes:
-- `entropy.sh` is the upstream filename; the install loop strips `.sh` so the destination is `/etc/snmp/entropy` (matching `snmpd.conf` extend directives). All other scripts have no extension.
-- `rrdcached` exists only in `agent-local/`, not `snmp/` — it is a check_mk plugin, not an SNMP extend.
+#### Extend scripts
 
-#### check_mk plugins — hybrid sourcing
+Installed from the librenms-agent clone when snmpd deploy is opted in. Notes:
+- `entropy.sh` → installed as `/etc/snmp/entropy` (`.sh` stripped)
+- **SMART** (PVE): `/etc/snmp/smart.config` auto-detected + `/etc/cron.d/librenms-smart` runs `smart -u`
+- `rrdcached` is check_mk only (`agent-local/`), not an SNMP extend
 
-Most plugins install from the librenms-agent clone. Exceptions hosted in this repo:
-- **`temperature`** (`configs/pve/monitoring/temperature`) — upstream plugin is an incomplete `hddtemp` template. Our version uses `sensors -j` (lm-sensors) and outputs per-sensor warn/crit thresholds in check_mk local format.
+#### check_mk plugins
+
+PVE defaults: `proxmox`, `rrdcached`, curated `temperature` (repo copy; upstream is incomplete).  
+Debian list is intentionally empty — SNMP covers distro/DMI/osupdate/chrony/etc.
 
 #### librenms-agent pinning
 
@@ -111,7 +116,7 @@ Most plugins install from the librenms-agent clone. Exceptions hosted in this re
 ### SSH ports
 
 - Port **22**: kept open on PVE for cluster traffic; must be restricted at external firewall
-- Port **2211**: key-only admin access (both modes); fail2ban must be configured for this port
+- Port **2211**: key-only admin access (both modes); restrict at external firewall
 
 ### confirm_overwrite pattern
 

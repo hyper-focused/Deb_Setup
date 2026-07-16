@@ -1,0 +1,13 @@
+# SNMP extend scripts — Proxmox VE bare metal
+# One script name per line (from librenms-agent snmp/). Lines starting with # skipped.
+# entropy.sh is installed as /etc/snmp/entropy (suffix stripped).
+# SMART needs /etc/snmp/smart.config + cron (init.sh configures both).
+
+linux_softnet_stat
+chrony
+osupdate
+entropy.sh
+smart
+postfix-queues
+postfixdetailed
+zfs
